@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+# Generated mock extracts are rebuilt from a seed; never commit them.
+data/
+# Action logs from local runs.
+logs/
+.env
