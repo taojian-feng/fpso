@@ -12,6 +12,9 @@ This repository is at **Phase 0**: proving that agents can build that cross-syst
 | `src/fpso/world_model/` | Postgres schema for the link store: entity pointers, links with confidence, confirmed patterns, the action log, and a chain walk |
 | `src/fpso/models/` | Model client agents call by role (`adjudicate`, `extract`, `induce`), with a stub backend and a Claude-on-Bedrock backend |
 | `src/fpso/governance/` | Action log: every model call is recorded with tokens and estimated cost |
+| `src/fpso/connectors/` | Read-only connectors for the five sources (ERP maintenance, ERP materials, P6, vessel, supplier mail), each also runnable as a read-only MCP server |
+| `src/fpso/resolution/` | Candidate matching: cheap, high-recall proposals for the five link types, with the signals that fired |
+| `src/fpso/eval/` | Scoring harness (the only code that reads `truth/`) and the two simulated reviewers |
 | `docs/aws-setup.md` | Steps to set up the AWS account for Bedrock |
 
 ## Quick start
@@ -20,6 +23,8 @@ This repository is at **Phase 0**: proving that agents can build that cross-syst
 uv venv && uv pip install -e ".[dev,db,bedrock]"
 fpso-synth --seed 7 --profile A --out data/kestrel-A   # development data
 fpso-synth --seed 7 --profile B --out data/kestrel-B   # held-back data for the final run
+fpso-eval --run data/kestrel-A                         # candidate recall + rule baseline report
+fpso-mcp erp-pm --extracts data/kestrel-A/extracts     # serve one source over MCP (stdio)
 pytest -q
 ```
 
