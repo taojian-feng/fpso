@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv venv --python 3.12 && uv pip install -e ".[dev,db,bedrock]"
+      - run: uv venv --python 3.12 && uv pip install -e ".[dev,db,anthropic,bedrock]"
       - run: .venv/bin/ruff check .
       - run: .venv/bin/ruff format --check .
       - run: .venv/bin/pytest -q

@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = ["mcp>=2.3,<3"]
 
 [project.optional-dependencies]
+anthropic = ["anthropic>=1.15"]
 bedrock = ["anthropic[bedrock]>=1.15"]
 db = ["psycopg[binary]>=3.2"]
 dev = ["pytest>=8", "ruff>=0.6"]
@@ -15,6 +16,7 @@ dev = ["pytest>=8", "ruff>=0.6"]
 fpso-synth = "fpso.synthetic.cli:main"
 fpso-mcp = "fpso.connectors.mcp_server:main"
 fpso-eval = "fpso.eval.harness:main"
+fpso-model-check = "fpso.models:main"
 
 [build-system]
 requires = ["hatchling"]
