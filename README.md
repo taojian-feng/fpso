@@ -10,21 +10,23 @@ This repository is at **Phase 0**: proving that agents can build that cross-syst
 | --- | --- |
 | `src/fpso/synthetic/` | Builds FPSO Kestrel's world with a hidden ground truth, then writes it as messy ERP, P6, vessel and supplier-email extracts |
 | `src/fpso/world_model/` | Postgres schema for the link store: entity pointers, links with confidence, confirmed patterns, the action log, and a chain walk |
-| `src/fpso/models/` | Model client agents call by role (`adjudicate`, `extract`, `induce`), with a stub backend and a Claude-on-Bedrock backend |
+| `src/fpso/models/` | Model client agents call by role (`adjudicate`, `extract`, `induce`), with a stub backend, an Anthropic API backend and a Claude-on-Bedrock backend |
 | `src/fpso/governance/` | Action log: every model call is recorded with tokens and estimated cost |
 | `src/fpso/connectors/` | Read-only connectors for the five sources (ERP maintenance, ERP materials, P6, vessel, supplier mail), each also runnable as a read-only MCP server |
 | `src/fpso/resolution/` | Candidate matching: cheap, high-recall proposals for the five link types, with the signals that fired |
 | `src/fpso/eval/` | Scoring harness (the only code that reads `truth/`) and the two simulated reviewers |
-| `docs/aws-setup.md` | Steps to set up the AWS account for Bedrock |
+| `docs/model-setup.md` | Steps to get an Anthropic API key and point the code at it |
+| `docs/aws-setup.md` | Steps to set up an AWS account for Bedrock, for a later move |
 
 ## Quick start
 
 ```bash
-uv venv && uv pip install -e ".[dev,db,bedrock]"
+uv venv && uv pip install -e ".[dev,db,anthropic]"
 fpso-synth --seed 7 --profile A --out data/kestrel-A   # development data
 fpso-synth --seed 7 --profile B --out data/kestrel-B   # held-back data for the final run
 fpso-eval --run data/kestrel-A                         # candidate recall + rule baseline report
 fpso-mcp erp-pm --extracts data/kestrel-A/extracts     # serve one source over MCP (stdio)
+fpso-model-check                                       # one tiny call per role (stub unless FPSO_MODEL_BACKEND=anthropic)
 pytest -q
 ```
 
