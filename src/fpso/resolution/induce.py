@@ -20,6 +20,7 @@ from fpso.resolution.patterns import CAPACITIES, Pattern, resolve
 
 MAX_GROUPS = 8
 MAX_EXAMPLES = 12
+MAX_WRONG = 5
 
 SYSTEM = """You improve an entity-resolution pipeline for an offshore operator's supply
 chain. For one link type you see the cases the model left unsure: a target record and
@@ -32,6 +33,11 @@ Propose at most two general rules that would break these ties, in this vocabular
   record, to_qty_field on the target record).
 - gap_signal, gap_low, gap_high: a numeric timing signal from the candidates and the
   window true links fall in. Leave gap_signal empty for none.
+A capacity rule alone rarely separates look-alikes that share a part and a quantity;
+pair it with a timing window when the confirmed links' signal statistics are tight.
+Rules already decided are listed with the example links the reviewer marked wrong and
+their signals. Do not propose a rejected rule again in other words: change what made
+those examples wrong, or propose nothing.
 Only propose a rule the evidence supports; an empty list is a fine answer. Write the
 statement as one plain sentence a planner or materials coordinator could confirm."""
 
@@ -140,16 +146,38 @@ def evidence_for(
     }
 
 
+def decided_for_prompt(
+    existing: list[Pattern], link_type: str, cands: list[Candidate] | None = None
+) -> list[dict]:
+    """Earlier rules for the link type, with the reviewer's wrong examples and signals."""
+    signals = {c.pair: c.signals for c in cands or [] if c.link_type == link_type}
+    return [
+        {
+            "statement": p.statement,
+            "from_capacity": p.from_capacity,
+            "gap_signal": p.gap_signal,
+            "gap_window": [p.gap_low, p.gap_high] if p.gap_signal else None,
+            "status": p.status,
+            "examples_shown": len(p.examples),
+            "examples_marked_wrong": [
+                {"link": e[1:], "signals": signals.get(tuple(e), {})}
+                for e in p.wrong_examples[:MAX_WRONG]
+            ],
+        }
+        for p in existing
+        if p.link_type == link_type
+    ]
+
+
 def propose(
-    client: ModelClient, evidence: dict, existing: list[Pattern], round_no: int
+    client: ModelClient,
+    evidence: dict,
+    existing: list[Pattern],
+    round_no: int,
+    cands: list[Candidate] | None = None,
 ) -> list[Pattern]:
     lt = evidence["link_type"]
-    body = {
-        **evidence,
-        "already_decided": [
-            {"statement": p.statement, "status": p.status} for p in existing if p.link_type == lt
-        ],
-    }
+    body = {**evidence, "already_decided": decided_for_prompt(existing, lt, cands)}
     if not evidence["unsure_targets"]:
         return []
     data = client.complete_json(

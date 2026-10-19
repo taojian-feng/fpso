@@ -10,6 +10,7 @@ from fpso.eval.rounds import build_gold, label_dev, run_round
 from fpso.models import ModelClient, StubBackend
 from fpso.resolution.adjudicate import Adjudication
 from fpso.resolution.candidates import LINK_TYPES, CandidateGenerator
+from fpso.resolution.induce import decided_for_prompt
 from fpso.resolution.patterns import Pattern, resolve
 from fpso.synthetic.export import export
 from fpso.synthetic.truth import build_world
@@ -94,9 +95,20 @@ def test_round_writes_versioned_reports_and_reuses_gold(run_dirs):
     assert [p["link_type"] for p in proposed] == ["component_po_line"]
     assert proposed[0]["status"] in {"confirmed", "rejected", "skipped"}
     assert proposed[0]["examples"]
+    wrong = proposed[0]["wrong_examples"]
+    assert all(tuple(e) not in load_truth(run) for e in wrong)
+    assert all(e in proposed[0]["examples"] for e in wrong)
     assert "## Patterns" in (rounds / "round-1.md").read_text()
     saved = json.loads((run / "reports" / "patterns.json").read_text())
     assert [p["id"] for p in saved] == [p["id"] for p in proposed]
+    # The next round's inducer sees the decision and the examples marked wrong, and the
+    # same rule is not proposed twice.
+    decided = decided_for_prompt([Pattern(**p) for p in saved], "component_po_line")
+    assert decided[0]["status"] == proposed[0]["status"]
+    assert len(decided[0]["examples_marked_wrong"]) == min(len(wrong), 5)
+    stub2 = StubBackend(responder=responder)
+    r2 = run_round(run, 2, per_type=50, client=ModelClient(stub2))
+    assert stub2.calls and r2["meta"]["patterns_this_round"] == []
     # Re-running round 1 replaces its own patterns instead of piling them up.
     run_round(run, 1, client=ModelClient(StubBackend(responder=responder)))
     assert len(json.loads((run / "reports" / "patterns.json").read_text())) == len(saved)

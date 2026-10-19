@@ -10,19 +10,32 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass, field
 
+PRIOR_WEIGHT = 3  # labels' worth of trust in the model's own confidence, per block
 
-def isotonic_fit(xs: list[float], ys: list[float]) -> tuple[list[float], list[float]]:
-    """Pool-adjacent-violators. Returns block lower bounds and their fitted values."""
+
+def _pav(blocks: list[list[float]]) -> list[list[float]]:
+    """Pool adjacent violators over [weighted_sum_y, weight, min_x, sum_x, count] blocks."""
+    out: list[list[float]] = []
+    for b in blocks:
+        out.append(list(b))
+        while len(out) > 1 and out[-2][0] / out[-2][1] >= out[-1][0] / out[-1][1]:
+            last = out.pop()
+            for i in (0, 1, 3, 4):
+                out[-1][i] += last[i]
+    return out
+
+
+def _raw_blocks(xs: list[float], ys: list[float]) -> list[list[float]]:
     by_x: dict[float, list[float]] = {}
     for x, y in zip(xs, ys, strict=True):
         by_x.setdefault(x, []).append(y)
-    blocks: list[list[float]] = []  # [sum_y, count, min_x]; ties start as one block
-    for x in sorted(by_x):
-        blocks.append([sum(by_x[x]), len(by_x[x]), x])
-        while len(blocks) > 1 and blocks[-2][0] / blocks[-2][1] >= blocks[-1][0] / blocks[-1][1]:
-            s, n, _ = blocks.pop()
-            blocks[-1][0] += s
-            blocks[-1][1] += n
+    # Ties start as one block.
+    return [[sum(v), len(v), x, x * len(v), len(v)] for x, v in sorted(by_x.items())]
+
+
+def isotonic_fit(xs: list[float], ys: list[float]) -> tuple[list[float], list[float]]:
+    """Pool-adjacent-violators. Returns block lower bounds and their fitted values."""
+    blocks = _pav(_raw_blocks(xs, ys))
     return [b[2] for b in blocks], [b[0] / b[1] for b in blocks]
 
 
@@ -32,11 +45,21 @@ class Calibrator:
     values: list[float] = field(default_factory=list)
 
     @classmethod
-    def fit(cls, scores: list[float], labels: list[bool]) -> Calibrator:
+    def fit(cls, scores: list[float], labels: list[bool], prior_weight: float = PRIOR_WEIGHT):
+        """Isotonic fit, with each block shrunk toward its mean model confidence.
+
+        A block with only a few labels, all correct, then reads as likely rather than
+        certain: ten right answers at confidence 0.75 calibrate to about 0.94, not 1.0.
+        """
         if not scores:
             return cls()
-        lowers, values = isotonic_fit(scores, [float(y) for y in labels])
-        return cls(lowers, values)
+        blocks = _raw_blocks(scores, [float(y) for y in labels])
+        shrunk = [
+            [b[0] + prior_weight * b[3] / b[4], b[1] + prior_weight, b[2], b[3], b[4]]
+            for b in blocks
+        ]
+        pooled = _pav(shrunk)
+        return cls([b[2] for b in pooled], [b[0] / b[1] for b in pooled])
 
     def predict(self, score: float) -> float:
         if not self.values:
@@ -48,9 +71,12 @@ class Calibrator:
 
 
 def choose_threshold(probs: list[float], labels: list[bool], target: float = 0.95) -> float:
-    """Lowest threshold whose accepted set has precision >= target. Above 1 means none."""
+    """Lowest threshold whose accepted set has precision >= target. Above 1 means none.
+
+    Every accepted link must also be calibrated at or above the target on its own.
+    """
     best = 1.01
-    for t in sorted(set(probs), reverse=True):
+    for t in sorted({p for p in probs if p >= target}, reverse=True):
         accepted = [y for p, y in zip(probs, labels, strict=True) if p >= t]
         if sum(accepted) / len(accepted) >= target:
             best = t

@@ -45,10 +45,19 @@ class Pattern:
     round: int = 0
     reviewer: str = ""
     examples: list = field(default_factory=list)
+    wrong_examples: list = field(default_factory=list)  # examples the reviewer marked wrong
 
     @property
     def signature(self) -> tuple:
-        return (self.link_type, self.from_capacity, self.gap_signal)
+        window = (self.gap_low, self.gap_high) if self.gap_signal else None
+        return (
+            self.link_type,
+            self.from_capacity,
+            self.from_qty_field,
+            self.to_qty_field,
+            self.gap_signal,
+            window,
+        )
 
     def as_dict(self) -> dict:
         return asdict(self)

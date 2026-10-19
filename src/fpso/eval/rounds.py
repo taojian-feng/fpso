@@ -45,7 +45,6 @@ DOUBLE_LABEL_CONFIDENCE = 0.9  # pairs at or above this always get a second revi
 DOUBLE_LABEL_SHARE = 0.2  # random share of the remaining pairs that get one too
 # From round 1 on, a link is auto-accepted only when the model's own (pattern-adjusted)
 # confidence is at least this, on top of the calibrated threshold. Round 0 had none.
-AUTO_ACCEPT_MIN_CONFIDENCE = 0.9
 
 
 @dataclass(frozen=True)
@@ -259,12 +258,6 @@ def to_markdown(run: dict, n: int, scores: dict, meta: dict) -> str:
             f"Model answers are reused from round {meta['answers_from_round']} (same prompt); "
             "this round's cost is pattern induction only.",
         ]
-    if meta.get("auto_accept_min_confidence"):
-        lines += [
-            "",
-            f"Auto-accept also needs the model's pattern-adjusted confidence to be at least "
-            f"{meta['auto_accept_min_confidence']}.",
-        ]
     proposed = meta.get("patterns_this_round") or []
     in_force = meta.get("patterns_in_force") or []
     if n >= 1:
@@ -377,13 +370,14 @@ def run_round(
         dev_targets = {(g.link_type, g.to_key) for g in gold if g.split == "dev"}
         for lt in LINK_TYPES:
             evidence = evidence_for(lt, current, labels[lt][0], cands, connectors)
-            for p in propose(client, evidence, patterns + new_patterns, n):
+            for p in propose(client, evidence, patterns + new_patterns, n, cands):
                 p.examples = [
                     list(e) for e in examples_for(p, current, cands, connectors, dev_targets)
                 ]
                 reviewer = reviewers[REVIEWER_FOR[lt]]
                 answer = reviewer.confirm_pattern(p.id, [tuple(e) for e in p.examples])
                 p.reviewer = reviewer.reviewer_id
+                p.wrong_examples = [list(e) for e in reviewer.wrong_examples(p.examples)]
                 p.status = {True: "confirmed", False: "rejected", None: "skipped"}[answer]
                 new_patterns.append(p)
         patterns_path.write_text(
@@ -398,8 +392,7 @@ def run_round(
     else:
         induce_cost = client.log.total_cost_usd - model_cost
     cost = model_cost + induce_cost
-    floor = AUTO_ACCEPT_MIN_CONFIDENCE if n >= 1 else 0.0
-    scores = score_round(final_adjs, gold, truth, reviewers, cost, floor)
+    scores = score_round(final_adjs, gold, truth, reviewers, cost)
     meta = {
         "model": adjs[0].model if adjs else client.role_models["adjudicate"],
         "backend": "replayed" if rescore else type(client.backend).__name__,
@@ -407,7 +400,6 @@ def run_round(
         "answers_from_round": reused_from,
         "model_cost_usd": round(model_cost, 4),
         "induce_cost_usd": round(induce_cost, 4),
-        "auto_accept_min_confidence": floor,
         "patterns_in_force": [p.id for p in all_patterns if p.status == "confirmed"],
         "patterns_this_round": [p.as_dict() for p in new_patterns],
         "commit": _git_commit(),

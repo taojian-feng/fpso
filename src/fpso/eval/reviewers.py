@@ -68,6 +68,10 @@ class SimulatedReviewer:
         share = sum(e in self.truth for e in examples) / len(examples)
         return self._answer(f"pattern:{pattern_id}", share >= bar)
 
+    def wrong_examples(self, examples: list) -> list[Pair]:
+        """The example links the reviewer points out as wrong when giving a decision."""
+        return [tuple(e) for e in examples if tuple(e) not in self.truth]
+
 
 def default_reviewers(truth: set[Pair], seed: int = 0, log: ActionLog | None = None):
     """The two mock reviewers from the plan."""
