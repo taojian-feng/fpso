@@ -24,11 +24,13 @@ from typing import Any, Protocol
 from fpso.governance import ActionLog, ActionRecord
 
 # Which model serves each role. Bulk adjudication uses the mid-size model, high-volume
-# email reading the small one, and pattern induction the large one (plan WS5).
+# email reading the small one, and pattern induction the large one (plan WS5). Source
+# onboarding (WS7) uses the mid-size model.
 DEFAULT_ROLE_MODELS: dict[str, str] = {
     "adjudicate": "claude-sonnet-5-5",
     "extract": "claude-haiku-5-5",
     "induce": "claude-opus-5-5",
+    "onboard": "claude-sonnet-5-5",
 }
 
 # USD per million tokens (input, output), Anthropic list prices. An estimate for per-run
