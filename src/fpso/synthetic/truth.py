@@ -267,6 +267,7 @@ class World:
     manifest_lines: list[ManifestLine]
     emails: list[Email]
     stock: dict[str, int]
+    scale: float = 1.0
 
     def links(self) -> list[tuple[str, str, str, str, str]]:
         """Cross-system links: (link_type, from_source, from_key, to_source, to_key)."""
@@ -634,4 +635,5 @@ def build_world(seed: int = 7, scale: float = 1.0, window_start: date | None = N
         manifest_lines=manifest_lines,
         emails=emails,
         stock=stock,
+        scale=scale,
     )

@@ -68,6 +68,10 @@ class SimulatedReviewer:
         share = sum(e in self.truth for e in examples) / len(examples)
         return self._answer(f"pattern:{pattern_id}", share >= bar)
 
+    def confirm_gap(self, gap_id: str, correct: bool) -> bool | None:
+        """Mark a readiness gap right or wrong. None means the reviewer skipped it."""
+        return self._answer(f"gap:{gap_id}", correct)
+
     def wrong_examples(self, examples: list) -> list[Pair]:
         """The example links the reviewer points out as wrong when giving a decision."""
         return [tuple(e) for e in examples if tuple(e) not in self.truth]

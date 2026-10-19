@@ -167,6 +167,7 @@ def export(world: World, out_dir: str | Path, profile: str = "A") -> dict:
         "operator": OPERATOR,
         "asset": ASSET,
         "seed": world.seed,
+        "scale": world.scale,
         "profile": profile,
         "profile_version": PROFILES[profile]["version"],
         "profile_settings": PROFILES[profile],
