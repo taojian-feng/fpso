@@ -185,8 +185,8 @@ def run_adjudication(
     reviewers = {r.name: r for r in default_reviewers(truth, log=log)}
     scores = score(adjs, truth, reviewers, prior_cost + client.log.total_cost_usd)
     meta = {
-        "model": client.role_models["adjudicate"],
-        "backend": type(client.backend).__name__,
+        "model": adjs[0].model if rescore and adjs else client.role_models["adjudicate"],
+        "backend": "replayed" if rescore else type(client.backend).__name__,
         "sample": sample,
         "groups_skipped": adjudicator.skipped_groups,
         "seconds": round(time.time() - t0, 1),
