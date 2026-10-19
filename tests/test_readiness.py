@@ -64,7 +64,7 @@ def test_with_true_links_the_agent_matches_the_truth(run_dir):
     truth = load_truth(run_dir)
     agent = ReadinessAgent(open_all(run_dir / "extracts"), None)
 
-    def oracle(targets):
+    def oracle(targets, urgency=None):
         for lt, k in targets:
             agent.links[(lt, k)] = [(t[1], 1.0, "oracle") for t in truth if t[:3:2] == (lt, k)]
 

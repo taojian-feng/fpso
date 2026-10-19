@@ -52,6 +52,7 @@ GAP_TYPES = ("no_supply", "late_po", "slipped", "not_shipped")
 HORIZON_WEEKS = (4, 26)
 RULE_ACCEPT = 0.9  # a rule match at or above this, clear of the runner-up, needs no model
 RULE_MARGIN = 0.1
+BATCH = 40  # groups per model batch, in urgency order
 MODEL_ACCEPT = 0.9  # the model's own confidence needed to accept its match
 LINK_TYPES_USED = ("component_po_line", "po_line_manifest_line", "po_email")
 
@@ -215,8 +216,13 @@ class ReadinessAgent:
 
     # Links ----------------------------------------------------------------------------
 
-    def resolve(self, targets: set[tuple[str, str]]) -> None:
-        """Accept links for the given (link_type, target) groups not resolved yet."""
+    def resolve(
+        self, targets: set[tuple[str, str]], urgency: dict[tuple[str, str], date] | None = None
+    ) -> None:
+        """Accept links for the given (link_type, target) groups not resolved yet.
+
+        Groups go to the model most urgent first (earliest need date), in batches, so a
+        run that hits the cost cap has settled the work packages starting soonest."""
         groups = {
             k: g
             for k, g in group_by_target(
@@ -241,10 +247,16 @@ class ReadinessAgent:
                 self.links[(lt, to_key)] = []
                 self.stats["unresolved"] += 1
         if to_model:
+            urgency = urgency or {}
+            pending = sorted(
+                group_by_target(to_model).items(),
+                key=lambda kv: (urgency.get(kv[0], date.max), kv[0]),
+            )
             before = self.adjudicator.skipped_groups
-            adjs += self.adjudicator.adjudicate(to_model)
-            asked = len(group_by_target(to_model))
-            self.stats["model_asked"] += asked
+            for i in range(0, len(pending), BATCH):
+                batch = [c for _, g in pending[i : i + BATCH] for c in g]
+                adjs += self.adjudicator.adjudicate(batch)
+            self.stats["model_asked"] += len(pending)
             self.stats["skipped_by_cost_cap"] += self.adjudicator.skipped_groups - before
         adjs = apply_patterns(adjs, self.patterns, self.cands, self.c)
         for (lt, to_key), g in group_by_target_adjs(adjs).items():
@@ -262,6 +274,25 @@ class ReadinessAgent:
             fp = hashlib.sha256(self.adjudicator.prompt(lt, to_key, g).encode()).hexdigest()[:16]
             return self.prior_fp.get(f"{lt}|{to_key}") == fp
         return sorted((c.pair, c.score) for c in g) == sorted((a.pair, a.rule_score) for a in old)
+
+    def _leading_targets(self, lt: str, sources: set[str]) -> set[tuple[str, str]]:
+        """Groups where one of these sources leads or ties for the lead. Only those can
+        link it; settling the others would cost model calls and change nothing here."""
+        out = set()
+        for (t, to_key), g in group_by_target([c for c in self.cands if c.link_type == lt]).items():
+            top = max(c.score for c in g)
+            if any(c.from_key in sources and c.score >= top - 0.05 for c in g):
+                out.add((t, to_key))
+        return out
+
+    def _urgency(self, lt: str, need: dict[str, date]) -> dict[tuple[str, str], date]:
+        """Each group's earliest need date among the sources it could link."""
+        out: dict[tuple[str, str], date] = {}
+        for c in self.cands:
+            if c.link_type == lt and c.from_key in need:
+                k = (lt, c.to_key)
+                out[k] = min(need[c.from_key], out.get(k, date.max))
+        return out
 
     def _open_sources(self, lt: str, sources: set[str]) -> set[str]:
         """Sources that lead (or tie for the lead) in a group the agent left unresolved."""
@@ -317,12 +348,10 @@ class ReadinessAgent:
         comps = [c for c in self.components if c.fields["AUFNR"] in scope]
         comp_keys = {c.key for c in comps}
         # Component -> PO line: targets are PO lines that list one of these components.
+        need = {c.key: parse_date(c.fields["BDTER"]) or date.max for c in comps}
         self.resolve(
-            {
-                (c.link_type, c.to_key)
-                for c in self.cands
-                if c.link_type == "component_po_line" and c.from_key in comp_keys
-            }
+            self._leading_targets("component_po_line", comp_keys),
+            self._urgency("component_po_line", need),
         )
         po_line_of = {}
         open_supply = self._open_sources("component_po_line", comp_keys)
@@ -333,13 +362,18 @@ class ReadinessAgent:
                         po_line_of[from_key] = to_key
         lines = set(po_line_of.values())
         pos = {self.po_lines[k].fields["EBELN"] for k in lines}
+        line_need = {pl: need[c] for c, pl in po_line_of.items()}
+        po_need: dict[str, date] = {}
+        for pl, d in line_need.items():
+            po = self.po_lines[pl].fields["EBELN"]
+            po_need[po] = min(d, po_need.get(po, date.max))
         self.resolve(
+            self._leading_targets("po_line_manifest_line", lines)
+            | self._leading_targets("po_email", pos),
             {
-                (c.link_type, c.to_key)
-                for c in self.cands
-                if (c.link_type == "po_line_manifest_line" and c.from_key in lines)
-                or (c.link_type == "po_email" and c.from_key in pos)
-            }
+                **self._urgency("po_line_manifest_line", line_need),
+                **self._urgency("po_email", po_need),
+            },
         )
         open_shipment = self._open_sources("po_line_manifest_line", lines)
         manifest = self.c["vessel"]
