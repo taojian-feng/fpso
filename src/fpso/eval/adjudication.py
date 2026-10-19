@@ -56,6 +56,59 @@ def is_calibration_target(link_type: str, to_key: str) -> bool:
     return zlib.crc32(f"{link_type}|{to_key}".encode()) % 2 == 0
 
 
+def ratio(n: float, d: float) -> float | None:
+    return round(n / d, 4) if d else None
+
+
+def score_link_type(
+    labelled: list[tuple[Adjudication, bool]], test: list[Adjudication], truth: set
+) -> dict:
+    """Fit calibration and threshold on reviewer labels, then score the test rows."""
+    cal = Calibrator.fit([a.confidence for a, _ in labelled], [y for _, y in labelled])
+    probs_cal = [cal.predict(a.confidence) for a, _ in labelled]
+    threshold = choose_threshold(probs_cal, [y for _, y in labelled], TARGET_PRECISION)
+
+    test_targets = {(a.link_type, a.to_key) for a in test}
+    test_true = {p for p in truth if (p[0], p[2]) in test_targets}
+    probs = [cal.predict(a.confidence) for a in test]
+    y = [a.pair in truth for a in test]
+    accepted = [a for a, p in zip(test, probs, strict=True) if p >= threshold]
+    proposed = {a.pair for a in test if a.verdict != "no_match"}
+    rule_acc = [a for a in test if a.rule_score >= 0.9]
+    tp = sum(a.pair in truth for a in accepted)
+    return {
+        "targets": len(test_targets),
+        "candidates": len(test),
+        "calibration_labels": len(labelled),
+        "threshold": round(threshold, 4),
+        "test_true_links": len(test_true),
+        "auto_accepted": len(accepted),
+        "precision": ratio(tp, len(accepted)),
+        "recall": ratio(len(proposed & test_true), len(test_true)),
+        "auto_resolved": ratio(tp, len(test_true)),
+        "ece": round(expected_calibration_error(probs, y), 4) if test else None,
+        "raw_match_precision": ratio(
+            sum(a.pair in truth for a in test if a.verdict == "match"),
+            sum(a.verdict == "match" for a in test),
+        ),
+        "rule_precision": ratio(sum(a.pair in truth for a in rule_acc), len(rule_acc)),
+        "rule_recall": ratio(sum(a.pair in truth for a in rule_acc), len(test_true)),
+    }
+
+
+def add_totals(out: dict[str, dict], cost_usd: float) -> dict[str, dict]:
+    resolved = sum(
+        round((s["auto_resolved"] or 0) * s["test_true_links"])
+        for k, s in out.items()
+        if not k.startswith("_")
+    )
+    out["_total"] = {
+        "cost_usd": round(cost_usd, 4),
+        "cost_per_resolved_link_usd": round(cost_usd / resolved, 4) if resolved else None,
+    }
+    return out
+
+
 def score(
     adjs: list[Adjudication], truth: set, reviewers: dict, cost_usd: float
 ) -> dict[str, dict]:
@@ -66,45 +119,11 @@ def score(
         test = [a for a in rows if not is_calibration_target(lt, a.to_key)]
         labelled = [(a, reviewers[REVIEWER_FOR[lt]].label(a.pair)) for a in calib]
         labelled = [(a, y) for a, y in labelled if y is not None]
-        cal = Calibrator.fit([a.confidence for a, _ in labelled], [y for _, y in labelled])
-        probs_cal = [cal.predict(a.confidence) for a, _ in labelled]
-        threshold = choose_threshold(probs_cal, [y for _, y in labelled], TARGET_PRECISION)
-
-        test_true = {p for p in truth if p[0] == lt and p[2] in {a.to_key for a in test}}
-        probs = [cal.predict(a.confidence) for a in test]
-        y = [a.pair in truth for a in test]
-        accepted = [a for a, p in zip(test, probs, strict=True) if p >= threshold]
-        proposed = {a.pair for a in test if a.verdict != "no_match"}
-        rule_acc = [a for a in test if a.rule_score >= 0.9]
-        tp = sum(a.pair in truth for a in accepted)
-
-        def ratio(n, d):
-            return round(n / d, 4) if d else None
-
-        out[lt] = {
-            "targets": len({a.to_key for a in rows}),
-            "candidates": len(rows),
-            "calibration_labels": len(labelled),
-            "threshold": round(threshold, 4),
-            "test_true_links": len(test_true),
-            "auto_accepted": len(accepted),
-            "precision": ratio(tp, len(accepted)),
-            "recall": ratio(len(proposed & test_true), len(test_true)),
-            "auto_resolved": ratio(tp, len(test_true)),
-            "ece": round(expected_calibration_error(probs, y), 4) if test else None,
-            "raw_match_precision": ratio(
-                sum(a.pair in truth for a in test if a.verdict == "match"),
-                sum(a.verdict == "match" for a in test),
-            ),
-            "rule_precision": ratio(sum(a.pair in truth for a in rule_acc), len(rule_acc)),
-            "rule_recall": ratio(sum(a.pair in truth for a in rule_acc), len(test_true)),
-        }
-    resolved = sum(round((s["auto_resolved"] or 0) * s["test_true_links"]) for s in out.values())
-    out["_total"] = {
-        "cost_usd": round(cost_usd, 4),
-        "cost_per_resolved_link_usd": round(cost_usd / resolved, 4) if resolved else None,
-    }
-    return out
+        out[lt] = score_link_type(labelled, test, truth)
+        # This quick experiment reports targets over both halves.
+        out[lt]["targets"] = len({a.to_key for a in rows})
+        out[lt]["candidates"] = len(rows)
+    return add_totals(out, cost_usd)
 
 
 def to_markdown(run: dict, scores: dict, meta: dict) -> str:

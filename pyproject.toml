@@ -19,6 +19,7 @@ fpso-eval = "fpso.eval.harness:main"
 fpso-model-check = "fpso.models:main"
 fpso-adjudicate = "fpso.eval.adjudication:main"
 fpso-onboard = "fpso.onboarding:main"
+fpso-round = "fpso.eval.rounds:main"
 
 [build-system]
 requires = ["hatchling"]

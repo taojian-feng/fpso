@@ -27,6 +27,7 @@ fpso-synth --seed 7 --profile A --out data/kestrel-A   # development data
 fpso-synth --seed 7 --profile B --out data/kestrel-B   # held-back data for the final run
 fpso-eval --run data/kestrel-A                         # candidate recall + rule baseline report
 fpso-adjudicate --run data/kestrel-A --sample 60        # model-in-the-loop precision/recall (capped at $5)
+fpso-round --run data/kestrel-A --round 0              # measured round on the fixed gold set
 fpso-onboard erp-mm --extracts data/kestrel-A/extracts  # onboarding draft for one source
 fpso-mcp erp-pm --extracts data/kestrel-A/extracts     # serve one source over MCP (stdio)
 fpso-model-check                                       # one tiny call per role (stub unless FPSO_MODEL_BACKEND=anthropic)
@@ -52,6 +53,10 @@ At full size, one run has about 300 equipment items, 190 materials, 1,500 work o
 ## Adjudication run
 
 `fpso-adjudicate` samples target records per link type (for example 60 manifest lines) and sends each one, with all its candidates and their signals, to Claude in one call. Half the targets are labelled by the simulated reviewers and used to fit an isotonic calibration and the auto-accept threshold for 95% precision. The other half are scored against `truth/`. The report gives precision of auto-accepted links, recall (true links the model did not reject), auto-resolved share, calibration error, the rule baseline on the same targets, and cost. With the stub backend every answer is "unsure", so the numbers only mean something on a real backend. `--max-cost` stops new calls once the estimated spend reaches the cap.
+
+## Measured rounds
+
+`fpso-round` is the harness for the plan's rounds. The first run fixes a gold set in `reports/gold.json`: 80 targets per link type, half easy and half hard, split 25% dev and 75% held-out. Every later round reuses it. On dev targets the simulated reviewers label each candidate pair; every high-confidence pair and a random 20% of the rest get a second reviewer, and pairs where they disagree are left out of calibration. Held-out targets are scored against `truth/`. Each round writes `reports/rounds/round-<n>.{json,md}` with the model, prompt hash and code commit, plus reviewer agreement and accuracy, and `summary.md` compares rounds. Profile B refuses to run without `--final`.
 
 ## Tests
 
