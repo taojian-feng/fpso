@@ -25,6 +25,7 @@ import random
 import subprocess
 import time
 import zlib
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -191,6 +192,17 @@ def _read_adjudications(path: Path) -> list[Adjudication]:
     return [Adjudication(**json.loads(line)) for line in path.read_text().splitlines()]
 
 
+def _read_json(path: Path):
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def group_by_adjudication(adjs: list[Adjudication]) -> dict[tuple[str, str], list[Adjudication]]:
+    out: dict[tuple[str, str], list[Adjudication]] = defaultdict(list)
+    for a in adjs:
+        out[(a.link_type, a.to_key)].append(a)
+    return out
+
+
 def _read_patterns(path: Path) -> list[dict]:
     return json.loads(path.read_text()) if path.exists() else []
 
@@ -253,10 +265,16 @@ def to_markdown(run: dict, n: int, scores: dict, meta: dict) -> str:
             f"| {pct(r['primary_accuracy_vs_truth'])} | {pct(r['label_precision_vs_truth'])} |"
         )
     if meta.get("answers_from_round") is not None:
+        asked = meta.get("groups_asked")
         lines += [
             "",
-            f"Model answers are reused from round {meta['answers_from_round']} (same prompt); "
-            "this round's cost is pattern induction only.",
+            f"Model answers are reused from round {meta['answers_from_round']} for every "
+            "target whose prompt is unchanged"
+            + (
+                f"; {asked} targets with changed candidates or signals were asked again."
+                if asked
+                else "; this round's cost is pattern induction only."
+            ),
         ]
     proposed = meta.get("patterns_this_round") or []
     in_force = meta.get("patterns_in_force") or []
@@ -294,7 +312,11 @@ def to_markdown(run: dict, n: int, scores: dict, meta: dict) -> str:
 
 def write_summary(rounds_dir: Path) -> None:
     reports = sorted(
-        (json.loads(p.read_text()) for p in rounds_dir.glob("round-*.json")),
+        (
+            json.loads(p.read_text())
+            for p in rounds_dir.glob("round-*.json")
+            if p.stem.removeprefix("round-").isdigit()
+        ),
         key=lambda r: r["round"],
     )
     lines = [
@@ -358,18 +380,43 @@ def run_round(
         prior = prior_report["meta"]
         model_cost = prior.get("model_cost_usd", prior_report["scores"]["_total"]["cost_usd"])
         reused_from = prior.get("answers_from_round")
-    elif earlier is not None:
-        # The adjudication prompt is unchanged, so the model's answers would be too:
-        # reuse them and spend this round's budget on pattern induction only.
-        adjs = _read_adjudications(rounds_dir / f"round-{earlier}.adjudications.jsonl")
-        saved.write_text((rounds_dir / f"round-{earlier}.adjudications.jsonl").read_text())
-        model_cost = 0.0
-        reused_from = earlier
+        groups_asked = prior.get("groups_asked")
     else:
-        adjs = adjudicator.adjudicate(gold_cands)
+        groups = group_by_target(gold_cands)
+        fingerprints = {
+            f"{lt}|{k}": hashlib.sha256(adjudicator.prompt(lt, k, g).encode()).hexdigest()[:16]
+            for (lt, k), g in groups.items()
+        }
+        reused: list[Adjudication] = []
+        todo = gold_cands
+        if earlier is not None:
+            # Same system prompt: reuse the earlier answer for every target whose prompt
+            # is unchanged, and ask the model only about targets whose candidates or
+            # signals changed. Rounds before prompt fingerprints were kept fall back to
+            # comparing candidate pairs and rule scores.
+            old_fp = _read_json(rounds_dir / f"round-{earlier}.prompts.json")
+            old = group_by_adjudication(
+                _read_adjudications(rounds_dir / f"round-{earlier}.adjudications.jsonl")
+            )
+            same = set()
+            for (lt, k), g in groups.items():
+                key = f"{lt}|{k}"
+                if old_fp is not None:
+                    if old_fp.get(key) == fingerprints[key]:
+                        same.add((lt, k))
+                elif sorted((c.pair, c.score) for c in g) == sorted(
+                    (a.pair, a.rule_score) for a in old.get((lt, k), [])
+                ):
+                    same.add((lt, k))
+            reused = [a for key in sorted(same) for a in old[key]]
+            todo = [c for c in gold_cands if (c.link_type, c.to_key) not in same]
+            reused_from = earlier
+        adjs = reused + (adjudicator.adjudicate(todo) if todo else [])
         with saved.open("w") as f:
             for a in adjs:
                 f.write(json.dumps(a.as_dict()) + "\n")
+        (rounds_dir / f"round-{n}.prompts.json").write_text(json.dumps(fingerprints, indent=0))
+        groups_asked = len({(c.link_type, c.to_key) for c in todo})
         model_cost = client.log.total_cost_usd
 
     # Only the scoring, reviewers and pattern confirmation below read the truth.
@@ -418,6 +465,7 @@ def run_round(
         "backend": "replayed" if rescore else type(client.backend).__name__,
         "prompt_hash": prompt_hash,
         "answers_from_round": reused_from,
+        "groups_asked": groups_asked,
         "model_cost_usd": round(model_cost, 4),
         "induce_cost_usd": round(induce_cost, 4),
         "patterns_in_force": [p.id for p in all_patterns if p.status == "confirmed"],

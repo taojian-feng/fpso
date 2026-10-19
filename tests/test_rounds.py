@@ -106,9 +106,17 @@ def test_round_writes_versioned_reports_and_reuses_gold(run_dirs):
     decided = decided_for_prompt([Pattern(**p) for p in saved], "component_po_line")
     assert decided[0]["status"] == proposed[0]["status"]
     assert len(decided[0]["examples_marked_wrong"]) == min(len(wrong), 5)
+    assert r1["meta"]["groups_asked"] == 0
+    # A target whose prompt changed since the earlier round is asked again; no other is.
+    fp_path = rounds / "round-1.prompts.json"
+    fps = json.loads(fp_path.read_text())
+    changed = sorted(fps)[0]
+    fp_path.write_text(json.dumps({**fps, changed: "stale"}))
     stub2 = StubBackend(responder=responder)
     r2 = run_round(run, 2, per_type=50, client=ModelClient(stub2))
-    assert stub2.calls and r2["meta"]["patterns_this_round"] == []
+    assert r2["meta"]["groups_asked"] == 1
+    assert sum(c["model"] == "claude-sonnet-5-5" for c in stub2.calls) == 1
+    assert r2["meta"]["patterns_this_round"] == []
     # Re-running round 1 replaces its own patterns instead of piling them up.
     run_round(run, 1, client=ModelClient(StubBackend(responder=responder)))
     assert len(json.loads((run / "reports" / "patterns.json").read_text())) == len(saved)
