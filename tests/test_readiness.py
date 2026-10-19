@@ -7,6 +7,7 @@ import pytest
 from fpso.connectors import open_all
 from fpso.eval.harness import load_truth
 from fpso.eval.reviewers import default_reviewers
+from fpso.eval.rounds import run_round
 from fpso.models import ModelClient, StubBackend
 from fpso.readiness import (
     Facts,
@@ -94,12 +95,16 @@ def test_reports_are_written_and_profile_b_is_held_back(run_dir, tmp_path):
             ]
         }
 
+    # A round's saved answers are reused where the prompt is unchanged.
+    run_round(run_dir, 0, per_type=10, client=ModelClient(StubBackend(responder=responder)))
     stub = StubBackend(responder=responder)
     run = json.loads((run_dir / "truth" / "run.json").read_text())
     dates = report_dates(date.fromisoformat(run["turnaround"][0]))
     reports = run_readiness(run_dir, dates, client=ModelClient(stub))
     assert [r["meta"]["as_of"] for r in reports] == [d.isoformat() for d in dates]
     assert any(c["model"] == "claude-haiku-5-5" for c in stub.calls)  # emails read
+    assert reports[0]["meta"]["answers_from_round"] == 0
+    assert reports[0]["meta"]["links"]["model_reused"] > 0
     for r in reports:
         s = r["scores"]
         assert s["work_packages"] > 0 and s["gap_precision"] > 0.8

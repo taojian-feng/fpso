@@ -519,7 +519,10 @@ def run_readiness(
     t0 = time.time()
     rounds = run_dir / "reports" / "rounds"
     latest = max(
-        (int(p.stem.split("-")[1]) for p in rounds.glob("round-*.adjudications.jsonl")),
+        (
+            int(p.name.split(".")[0].removeprefix("round-"))
+            for p in rounds.glob("round-*.adjudications.jsonl")
+        ),
         default=None,
     )
     prior, prior_fp = [], None
