@@ -61,18 +61,29 @@ def ratio(n: float, d: float) -> float | None:
 
 
 def score_link_type(
-    labelled: list[tuple[Adjudication, bool]], test: list[Adjudication], truth: set
+    labelled: list[tuple[Adjudication, bool]],
+    test: list[Adjudication],
+    truth: set,
+    min_confidence: float = 0.0,
 ) -> dict:
-    """Fit calibration and threshold on reviewer labels, then score the test rows."""
+    """Fit calibration and threshold on reviewer labels, then score the test rows.
+
+    ``min_confidence`` is a floor on the model's own confidence: below it a link is never
+    auto-accepted, however well its calibration block did on the labels.
+    """
     cal = Calibrator.fit([a.confidence for a, _ in labelled], [y for _, y in labelled])
-    probs_cal = [cal.predict(a.confidence) for a, _ in labelled]
+
+    def accept_prob(a: Adjudication) -> float:
+        return cal.predict(a.confidence) if a.confidence >= min_confidence else 0.0
+
+    probs_cal = [accept_prob(a) for a, _ in labelled]
     threshold = choose_threshold(probs_cal, [y for _, y in labelled], TARGET_PRECISION)
 
     test_targets = {(a.link_type, a.to_key) for a in test}
     test_true = {p for p in truth if (p[0], p[2]) in test_targets}
     probs = [cal.predict(a.confidence) for a in test]
     y = [a.pair in truth for a in test]
-    accepted = [a for a, p in zip(test, probs, strict=True) if p >= threshold]
+    accepted = [a for a in test if a.confidence >= min_confidence and accept_prob(a) >= threshold]
     proposed = {a.pair for a in test if a.verdict != "no_match"}
     rule_acc = [a for a in test if a.rule_score >= 0.9]
     tp = sum(a.pair in truth for a in accepted)
