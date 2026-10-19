@@ -53,6 +53,8 @@ HORIZON_WEEKS = (4, 26)
 RULE_ACCEPT = 0.9  # a rule match at or above this, clear of the runner-up, needs no model
 RULE_MARGIN = 0.1
 BATCH = 40  # groups per model batch, in urgency order
+CHUNK = 25  # components settled end to end at a time, soonest need first
+MAX_SHOWN = 6  # candidates per group shown to the model
 MODEL_ACCEPT = 0.9  # the model's own confidence needed to accept its match
 LINK_TYPES_USED = ("component_po_line", "po_line_manifest_line", "po_email")
 
@@ -89,7 +91,7 @@ class Facts:
     delivery: date | None = None
     slips: list[tuple[date, str]] = field(default_factory=list)  # new date, email
     shipments: list[tuple[date, int, str]] = field(default_factory=list)  # depart, qty, line
-    unsettled: set[str] = field(default_factory=set)  # 'supply', 'shipment': links left open
+    unsettled: set[str] = field(default_factory=set)  # 'supply', 'shipment', 'email' left open
 
     def sources(self) -> dict:
         return {
@@ -109,6 +111,8 @@ def assess(f: Facts) -> str | None:
         return "unverified" if "supply" in f.unsettled else "no_supply"
     if f.delivery is not None and f.delivery > f.need:
         return "late_po"
+    if "email" in f.unsettled:
+        return "unverified"  # an unread supplier email may report a slip
     if any(d > f.need for d, _ in f.slips):
         return "slipped"
     if sum(q for d, q, _ in f.shipments if d < f.need) < f.qty:
@@ -199,6 +203,7 @@ class ReadinessAgent:
         self.prior_fp = prior_fingerprints
         self.links: dict[tuple[str, str], list[tuple[str, float, str]]] = {}
         self.stats = defaultdict(int)
+        self.settled_through: date | None = None
         self.email_reads: dict[str, dict] = {}
         pm, mm = connectors["erp-pm"], connectors["erp-mm"]
         self.work_orders = {r.key: r for r in pm.iter("work_order")}
@@ -241,8 +246,10 @@ class ReadinessAgent:
             elif self._reusable(lt, to_key, g):
                 adjs += self.prior[(lt, to_key)]
                 self.stats["model_reused"] += 1
+            elif self.adjudicator and not self.over_budget():
+                to_model += ranked[:MAX_SHOWN]  # the rest are far behind the leaders
             elif self.adjudicator:
-                to_model += g
+                continue  # past the cost cap: left open, not settled as unresolvable
             else:
                 self.links[(lt, to_key)] = []
                 self.stats["unresolved"] += 1
@@ -264,7 +271,8 @@ class ReadinessAgent:
             ok = best.verdict == "match" and best.confidence >= MODEL_ACCEPT
             self.links[(lt, to_key)] = [(best.from_key, best.confidence, "model")] if ok else []
         for k in groups:
-            self.links.setdefault(k, [])
+            if k not in self.links and (self.adjudicator is None or not self.over_budget()):
+                self.links[k] = []
 
     def _reusable(self, lt: str, to_key: str, g: list[Candidate]) -> bool:
         old = self.prior.get((lt, to_key))
@@ -295,9 +303,10 @@ class ReadinessAgent:
         return out
 
     def _open_sources(self, lt: str, sources: set[str]) -> set[str]:
-        """Sources that lead (or tie for the lead) in a group the agent left unresolved."""
+        """Sources that lead (or tie for the lead) in a group with no accepted link: left
+        unresolved, or never reached because the cost cap stopped the walk."""
         groups = group_by_target(
-            [c for c in self.cands if c.link_type == lt and self.links.get((lt, c.to_key)) == []]
+            [c for c in self.cands if c.link_type == lt and not self.links.get((lt, c.to_key))]
         )
         out = set()
         for g in groups.values():
@@ -317,14 +326,15 @@ class ReadinessAgent:
 
     # Emails ---------------------------------------------------------------------------
 
-    def read_email(self, key: str) -> dict:
+    def read_email(self, key: str) -> dict | None:
         if key in self.email_reads:
             return self.email_reads[key]
         msg = self.c["supplier-mail"].get("message", key)
-        out = dict(EXTRACT_SCHEMA["default"])
-        if self.client and not (
-            self.max_cost_usd is not None and self.client.log.total_cost_usd >= self.max_cost_usd
-        ):
+        if self.client is None:
+            out = dict(EXTRACT_SCHEMA["default"])  # no model: emails are not read
+        elif self.over_budget():
+            return None  # unread: the slip, if any, stays unknown
+        else:
             out = self.client.complete_json(
                 agent="readiness",
                 role="extract",
@@ -339,43 +349,67 @@ class ReadinessAgent:
 
     # The walk -------------------------------------------------------------------------
 
+    def over_budget(self) -> bool:
+        return (
+            self.client is not None
+            and self.max_cost_usd is not None
+            and self.client.log.total_cost_usd >= self.max_cost_usd
+        )
+
+    def _settle(self, comps: list, as_of: date) -> None:
+        """Settle the whole chain for these components: their PO lines, then those lines'
+        manifest lines and supplier emails, then read the emails."""
+        keys = {c.key for c in comps}
+        need = {c.key: parse_date(c.fields["BDTER"]) or date.max for c in comps}
+        self.resolve(
+            self._leading_targets("component_po_line", keys),
+            self._urgency("component_po_line", need),
+        )
+        po_line_of = self._po_lines_of(keys)
+        lines = set(po_line_of.values())
+        pos = {self.po_lines[k].fields["EBELN"] for k in lines}
+        self.resolve(
+            self._leading_targets("po_line_manifest_line", lines)
+            | self._leading_targets("po_email", pos)
+        )
+        for po in sorted(pos):
+            for msg_key in self.linked_from("po_email", po):
+                msg = self.c["supplier-mail"].get("message", msg_key)
+                if parse_date(msg.fields["date"]) <= as_of:
+                    self.read_email(msg_key)
+
+    def _po_lines_of(self, comp_keys: set[str]) -> dict[str, str]:
+        out = {}
+        for (lt, to_key), accepted in self.links.items():
+            if lt == "component_po_line":
+                for from_key, _, _ in accepted:
+                    if from_key in comp_keys:
+                        out[from_key] = to_key
+        return out
+
     def facts(self, as_of: date) -> list[Facts]:
         scope = {
             k: w
             for k, w in self.work_orders.items()
             if (d := parse_date(w.fields["GSTRP"])) and in_horizon(d, as_of)
         }
-        comps = [c for c in self.components if c.fields["AUFNR"] in scope]
+        comps = sorted(
+            (c for c in self.components if c.fields["AUFNR"] in scope),
+            key=lambda c: (parse_date(c.fields["BDTER"]) or date.max, c.key),
+        )
+        # Work through the chain in order of need, a few components at a time, so a run
+        # that hits the cost cap has settled the soonest work packages end to end.
+        self.settled_through = None
+        for i in range(0, len(comps), CHUNK):
+            # Past the cost cap this still settles what rule matches decide for free.
+            chunk = comps[i : i + CHUNK]
+            self._settle(chunk, as_of)
+            if not self.over_budget():
+                self.settled_through = parse_date(chunk[-1].fields["BDTER"])
         comp_keys = {c.key for c in comps}
-        # Component -> PO line: targets are PO lines that list one of these components.
-        need = {c.key: parse_date(c.fields["BDTER"]) or date.max for c in comps}
-        self.resolve(
-            self._leading_targets("component_po_line", comp_keys),
-            self._urgency("component_po_line", need),
-        )
-        po_line_of = {}
+        po_line_of = self._po_lines_of(comp_keys)
         open_supply = self._open_sources("component_po_line", comp_keys)
-        for (lt, to_key), accepted in self.links.items():
-            if lt == "component_po_line":
-                for from_key, _, _ in accepted:
-                    if from_key in comp_keys:
-                        po_line_of[from_key] = to_key
-        lines = set(po_line_of.values())
-        pos = {self.po_lines[k].fields["EBELN"] for k in lines}
-        line_need = {pl: need[c] for c, pl in po_line_of.items()}
-        po_need: dict[str, date] = {}
-        for pl, d in line_need.items():
-            po = self.po_lines[pl].fields["EBELN"]
-            po_need[po] = min(d, po_need.get(po, date.max))
-        self.resolve(
-            self._leading_targets("po_line_manifest_line", lines)
-            | self._leading_targets("po_email", pos),
-            {
-                **self._urgency("po_line_manifest_line", line_need),
-                **self._urgency("po_email", po_need),
-            },
-        )
-        open_shipment = self._open_sources("po_line_manifest_line", lines)
+        open_shipment = self._open_sources("po_line_manifest_line", set(po_line_of.values()))
         manifest = self.c["vessel"]
         out = []
         for c in comps:
@@ -406,6 +440,9 @@ class ReadinessAgent:
                     if parse_date(msg.fields["date"]) > as_of:
                         continue  # not received yet on the report date
                     read = self.read_email(msg_key)
+                    if read is None:
+                        facts.unsettled.add("email")
+                        continue
                     new = _iso(read.get("new_date", ""))
                     if not read.get("is_delay") or new is None:
                         continue
@@ -505,7 +542,15 @@ def to_markdown(run: dict, as_of: date, facts: list[Facts], scores: dict, meta: 
         )
     lines += [
         "",
-        f"Links: {meta['links']}. Cost ${meta['cost_usd']:.2f}.",
+        f"Links so far this run: {meta['links']}. Cost for this date ${meta['cost_usd']:.2f} "
+        f"(run total ${meta['run_cost_usd']:.2f})."
+        + (
+            f" The model settled links for components needed up to "
+            f"{meta['model_settled_through']}; later ones rely on rule links where the cost "
+            "cap stopped it."
+            if meta.get("model_settled_through")
+            else ""
+        ),
         "",
         "## Work packages with gaps",
         "",
@@ -584,8 +629,10 @@ def run_readiness(
     )
     world = None
     reports = []
+    spent = 0.0
     for d in as_of or []:
         facts = agent.facts(d)
+        total = client.log.total_cost_usd if client else 0.0
         # Only the scoring below reads the truth.
         world = world or load_world(run_dir)
         truth = truth_facts(world, d)
@@ -593,9 +640,13 @@ def run_readiness(
         scores = score_report(facts, truth, planner, d)
         meta = {
             "as_of": d.isoformat(),
-            "links": dict(agent.stats),
+            "links": dict(agent.stats),  # cumulative over this run's report dates
             "emails_read": agent.stats.get("emails_read", 0),
-            "cost_usd": round(client.log.total_cost_usd if client else 0.0, 4),
+            "cost_usd": round(total - spent, 4),  # this report date only
+            "run_cost_usd": round(total, 4),
+            "model_settled_through": agent.settled_through.isoformat()
+            if agent.settled_through and client
+            else None,
             "seconds": round(time.time() - t0, 1),
             "answers_from_round": latest,
         }
@@ -617,6 +668,7 @@ def run_readiness(
         (out_dir / f"{d.isoformat()}.json").write_text(json.dumps(report, indent=2, default=str))
         (out_dir / f"{d.isoformat()}.md").write_text(to_markdown(run, d, facts, scores, meta))
         reports.append(report)
+        spent = total
     return reports
 
 
