@@ -10,9 +10,10 @@ held-out targets are never used for tuning.
 Each round adjudicates the gold targets' candidates. On the dev targets, the simulated
 reviewers label the candidate pairs: the pairs that decide the threshold (high model
 confidence) and a random 20% of the rest get a second reviewer, and pairs where the two
-disagree are left out of calibration. The calibrator and auto-accept threshold are fitted
-on those labels; the held-out targets are scored against the hidden truth. Results go to
-reports/rounds/round-<n>.{json,md}, with reports/rounds/summary.md comparing all rounds.
+disagree, or where one of the two skipped, are left out of calibration. The calibrator and
+auto-accept threshold are fitted on those labels; the held-out targets are scored against
+the hidden truth. Results go to reports/rounds/round-<n>.{json,md}, with
+reports/rounds/summary.md comparing all rounds.
 """
 
 from __future__ import annotations
@@ -99,13 +100,12 @@ def label_dev(
 ) -> tuple[list[tuple[Adjudication, bool]], dict]:
     """Reviewer labels for calibration, with double-labelling where it matters."""
     labelled = []
-    agree = both = dropped = answered = correct = 0
+    agree = both = dropped = unconfirmed = answered = correct = 0
     for a in rows:
         y1 = primary.label(a.pair)
         in_sample = _in_random_share(a.pair, DOUBLE_LABEL_SHARE, seed)
-        y2 = None
-        if a.confidence >= DOUBLE_LABEL_CONFIDENCE or in_sample:
-            y2 = secondary.label(a.pair)
+        double = a.confidence >= DOUBLE_LABEL_CONFIDENCE or in_sample
+        y2 = secondary.label(a.pair) if double else None
         if y1 is not None:
             answered += 1
             correct += y1 == (a.pair in truth)
@@ -115,12 +115,18 @@ def label_dev(
         if y1 is not None and y2 is not None and y1 != y2:
             dropped += 1
             continue
+        if double and (y1 is None) != (y2 is None):
+            # One reviewer skipped, so nothing confirms the other's answer. A single wrong
+            # "no" here is enough to sink a threshold on a small dev set.
+            unconfirmed += 1
+            continue
         y = y1 if y1 is not None else y2
         if y is not None:
             labelled.append((a, y))
     stats = {
         "labels_used": len(labelled),
         "disagreements_dropped": dropped,
+        "unconfirmed_dropped": unconfirmed,
         "agreement_on_random_double_labels": ratio(agree, both),
         "random_double_labels": both,
         "primary_accuracy_vs_truth": ratio(correct, answered),
@@ -191,15 +197,15 @@ def to_markdown(run: dict, n: int, scores: dict, meta: dict) -> str:
         "",
         "## Reviewer labels (dev)",
         "",
-        "| Link type | Labels used | Disagreements dropped | Agreement (random 20%) "
-        "| Primary accuracy | Label precision |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Link type | Labels used | Disagreements dropped | Unconfirmed dropped "
+        "| Agreement (random 20%) | Primary accuracy | Label precision |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for lt in LINK_TYPES:
         r = scores[lt]["reviewers"]
         lines.append(
             f"| {lt} | {r['labels_used']} | {r['disagreements_dropped']} "
-            f"| {pct(r['agreement_on_random_double_labels'])} "
+            f"| {r['unconfirmed_dropped']} | {pct(r['agreement_on_random_double_labels'])} "
             f"| {pct(r['primary_accuracy_vs_truth'])} | {pct(r['label_precision_vs_truth'])} |"
         )
     if total["cost_per_resolved_link_usd"] is not None:

@@ -41,14 +41,15 @@ def test_double_labels_drop_disagreements_and_report_accuracy():
     truth = {("t", str(i), "x") for i in range(300)}
     rows = [Adjudication("t", str(i), "x", 0.5, "match", 0.95, "") for i in range(300)]
     rows += [Adjudication("t", str(i), "y", 0.1, "no_match", 0.05, "") for i in range(300)]
-    a = SimulatedReviewer("a", "planner", truth, error_rate=0.05, skip_rate=0.0)
-    b = SimulatedReviewer("b", "materials", truth, error_rate=0.05, skip_rate=0.0)
+    a = SimulatedReviewer("a", "planner", truth, error_rate=0.05, skip_rate=0.1)
+    b = SimulatedReviewer("b", "materials", truth, error_rate=0.05, skip_rate=0.1)
     labelled, stats = label_dev(rows, a, b, truth)
     # Every high-confidence pair is double-labelled, so wrong "no" answers there mostly
     # drop out instead of reaching calibration.
     high = [y for adj, y in labelled if adj.confidence >= 0.9]
-    assert sum(high) / len(high) > 0.99
+    assert sum(high) / len(high) > 0.995
     assert stats["disagreements_dropped"] > 0
+    assert stats["unconfirmed_dropped"] > 0  # a skip leaves a high-confidence pair unconfirmed
     assert 0.85 < stats["agreement_on_random_double_labels"] < 0.97
     assert 0.92 < stats["primary_accuracy_vs_truth"] < 0.98
 

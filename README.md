@@ -56,7 +56,7 @@ At full size, one run has about 300 equipment items, 190 materials, 1,500 work o
 
 ## Measured rounds
 
-`fpso-round` is the harness for the plan's rounds. The first run fixes a gold set in `reports/gold.json`: 80 targets per link type, half easy and half hard, split 25% dev and 75% held-out. Every later round reuses it. On dev targets the simulated reviewers label each candidate pair; every high-confidence pair and a random 20% of the rest get a second reviewer, and pairs where they disagree are left out of calibration. Held-out targets are scored against `truth/`. Each round writes `reports/rounds/round-<n>.{json,md}` with the model, prompt hash and code commit, plus reviewer agreement and accuracy, and `summary.md` compares rounds. Profile B refuses to run without `--final`.
+`fpso-round` is the harness for the plan's rounds. The first run fixes a gold set in `reports/gold.json`: 80 targets per link type, half easy and half hard, split 25% dev and 75% held-out. Every later round reuses it. On dev targets the simulated reviewers label each candidate pair; every high-confidence pair and a random 20% of the rest get a second reviewer, and pairs where they disagree, or where one of them skipped, are left out of calibration. Held-out targets are scored against `truth/`. Each round writes `reports/rounds/round-<n>.{json,md}` with the model, prompt hash and code commit, plus reviewer agreement and accuracy, and `summary.md` compares rounds. Profile B refuses to run without `--final`.
 
 ## Tests
 
