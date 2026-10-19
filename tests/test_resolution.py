@@ -82,3 +82,21 @@ def test_pattern_confirmation_follows_example_quality():
     assert r.confirm_pattern("p1", good) is True
     assert r.confirm_pattern("p2", bad) is False
     assert len(default_reviewers(truth)) == 2
+
+
+def test_reference_signals_point_at_true_links(run_dir):
+    cands = CandidateGenerator(open_all(run_dir / "extracts")).generate()
+    truth = load_truth(run_dir)
+
+    def precision(fired):
+        hits = [c for c in cands if fired(c.signals)]
+        assert hits
+        return sum(c.pair in truth for c in hits) / len(hits)
+
+    # A supplier's sales-order reference and a manifest's cited PO item name the link.
+    assert precision(lambda s: "sales_order" in s) > 0.9
+    assert precision(lambda s: s.get("po_item") is True) > 0.9
+    assert precision(lambda s: s.get("po_item") is False) < 0.1
+    # Weaker: the equipment a manifest names, and exact item quantities in an email.
+    assert precision(lambda s: s.get("manifest_work_orders") == 1) > 0.7  # few cases
+    assert precision(lambda s: s.get("item_qty_match") == 1.0) > 0.6

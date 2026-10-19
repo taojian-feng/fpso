@@ -48,10 +48,21 @@ def test_isotonic_is_monotone_and_pools_ties():
     assert lowers[-1] == 0.9
     cal = Calibrator.fit([0.1, 0.2, 0.2, 0.3, 0.9], [False, True, False, False, True])
     assert cal.predict(0.9) == 1.0
+    shrunk = Calibrator.fit([0.1, 0.2, 0.2, 0.3, 0.9], [False, True, False, False, True], 3)
+    assert shrunk.predict(0.9) == (1 + 3 * 0.9) / 4  # one label shrunk toward its confidence
     assert cal.predict(0.2) == cal.predict(0.3)  # 0.2 (0.5) and 0.3 (0) violate, so pool
     # A confidence never seen in the labels must not borrow the top block's value.
     assert cal.predict(0.55) == cal.predict(0.3) < 1.0
     assert cal.predict(0.0) == cal.predict(0.1)
+
+
+def test_few_lucky_labels_do_not_earn_auto_accept():
+    # Ten right answers at 0.75 sit under a well-labelled top block.
+    scores = [0.75] * 10 + [0.99] * 60
+    cal = Calibrator.fit(scores, [True] * 70, prior_weight=3)
+    probs = [cal.predict(s) for s in scores]
+    assert cal.predict(0.75) < 0.95 <= cal.predict(0.99)
+    assert choose_threshold(probs, [True] * 70) == cal.predict(0.99)
 
 
 def test_threshold_and_ece():
