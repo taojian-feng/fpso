@@ -17,6 +17,8 @@ fpso-synth = "fpso.synthetic.cli:main"
 fpso-mcp = "fpso.connectors.mcp_server:main"
 fpso-eval = "fpso.eval.harness:main"
 fpso-model-check = "fpso.models:main"
+fpso-adjudicate = "fpso.eval.adjudication:main"
+fpso-onboard = "fpso.onboarding:main"
 
 [build-system]
 requires = ["hatchling"]

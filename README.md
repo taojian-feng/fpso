@@ -13,8 +13,9 @@ This repository is at **Phase 0**: proving that agents can build that cross-syst
 | `src/fpso/models/` | Model client agents call by role (`adjudicate`, `extract`, `induce`), with a stub backend, an Anthropic API backend and a Claude-on-Bedrock backend |
 | `src/fpso/governance/` | Action log: every model call is recorded with tokens and estimated cost |
 | `src/fpso/connectors/` | Read-only connectors for the five sources (ERP maintenance, ERP materials, P6, vessel, supplier mail), each also runnable as a read-only MCP server |
-| `src/fpso/resolution/` | Candidate matching: cheap, high-recall proposals for the five link types, with the signals that fired |
-| `src/fpso/eval/` | Scoring harness (the only code that reads `truth/`) and the two simulated reviewers |
+| `src/fpso/resolution/` | Candidate matching (cheap, high-recall proposals with the signals that fired), Claude adjudication of each target's candidates, and per-link-type calibration with an auto-accept threshold |
+| `src/fpso/onboarding.py` | Onboarding agent: drafts a plain-language description of a new source, its keys and the link types it can join |
+| `src/fpso/eval/` | Scoring harness (the only code that reads `truth/`), the adjudication run, and the two simulated reviewers |
 | `docs/model-setup.md` | Steps to get an Anthropic API key and point the code at it |
 | `docs/aws-setup.md` | Steps to set up an AWS account for Bedrock, for a later move |
 
@@ -25,6 +26,8 @@ uv venv && uv pip install -e ".[dev,db,anthropic]"
 fpso-synth --seed 7 --profile A --out data/kestrel-A   # development data
 fpso-synth --seed 7 --profile B --out data/kestrel-B   # held-back data for the final run
 fpso-eval --run data/kestrel-A                         # candidate recall + rule baseline report
+fpso-adjudicate --run data/kestrel-A --sample 60        # model-in-the-loop precision/recall (capped at $5)
+fpso-onboard erp-mm --extracts data/kestrel-A/extracts  # onboarding draft for one source
 fpso-mcp erp-pm --extracts data/kestrel-A/extracts     # serve one source over MCP (stdio)
 fpso-model-check                                       # one tiny call per role (stub unless FPSO_MODEL_BACKEND=anthropic)
 pytest -q
@@ -45,6 +48,10 @@ At full size, one run has about 300 equipment items, 190 materials, 1,500 work o
 ### Corruption profiles
 
 `A` is the development profile. It covers tag separator and case drift, missing work-order references, abbreviated manifest text, and PO numbers that appear only in email subjects. `B` uses different rules and is held back for the final measurement. It drops train suffixes, merges manifest lines, zero-pads PO numbers, puts PO numbers only in quoted replies, and writes dates day-first. Profiles are versioned in `src/fpso/synthetic/corrupt.py`. Add a new version instead of editing an existing one.
+
+## Adjudication run
+
+`fpso-adjudicate` samples target records per link type (for example 60 manifest lines) and sends each one, with all its candidates and their signals, to Claude in one call. Half the targets are labelled by the simulated reviewers and used to fit an isotonic calibration and the auto-accept threshold for 95% precision. The other half are scored against `truth/`. The report gives precision of auto-accepted links, recall (true links the model did not reject), auto-resolved share, calibration error, the rule baseline on the same targets, and cost. With the stub backend every answer is "unsure", so the numbers only mean something on a real backend. `--max-cost` stops new calls once the estimated spend reaches the cap.
 
 ## Tests
 
