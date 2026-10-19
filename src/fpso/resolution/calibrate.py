@@ -10,7 +10,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass, field
 
-PRIOR_WEIGHT = 3  # labels' worth of trust in the model's own confidence, per block
+PRIOR_WEIGHT = 0  # labels' worth of trust in the model's own confidence, per block
 
 
 def _pav(blocks: list[list[float]]) -> list[list[float]]:
@@ -46,10 +46,10 @@ class Calibrator:
 
     @classmethod
     def fit(cls, scores: list[float], labels: list[bool], prior_weight: float = PRIOR_WEIGHT):
-        """Isotonic fit, with each block shrunk toward its mean model confidence.
-
-        A block with only a few labels, all correct, then reads as likely rather than
-        certain: ten right answers at confidence 0.75 calibrate to about 0.94, not 1.0.
+        """Isotonic fit. A positive ``prior_weight`` shrinks each block toward its mean
+        model confidence, so ten right answers at 0.75 calibrate to about 0.94 (weight 3)
+        instead of 1.0. Off by default: on live runs the model is underconfident, and
+        shrinking cut auto-resolution with no gain in precision.
         """
         if not scores:
             return cls()

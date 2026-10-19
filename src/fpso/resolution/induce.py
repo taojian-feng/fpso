@@ -175,7 +175,9 @@ def propose(
     existing: list[Pattern],
     round_no: int,
     cands: list[Candidate] | None = None,
+    filtered: list[dict] | None = None,
 ) -> list[Pattern]:
+    """Validated new rules. Proposals that fail validation go to ``filtered``, with why."""
     lt = evidence["link_type"]
     body = {**evidence, "already_decided": decided_for_prompt(existing, lt, cands)}
     if not evidence["unsure_targets"]:
@@ -205,19 +207,24 @@ def propose(
             gap_high=float(d.get("gap_high", 0)),
             round=round_no,
         )
-        valid = (
-            p.from_capacity in CAPACITIES
-            and (not p.gap_signal or p.gap_signal in known_signals)
-            and (p.gap_low <= p.gap_high)
-            and (
-                p.from_capacity != "quantity" or {p.from_qty_field, p.to_qty_field} <= known_fields
-            )
-            and (p.from_capacity != "any" or p.gap_signal)
-            and p.signature not in seen
-        )
-        if valid:
-            seen.add(p.signature)
-            out.append(p)
+        checks = [
+            (p.from_capacity in CAPACITIES, "unknown capacity"),
+            (not p.gap_signal or p.gap_signal in known_signals, "unknown timing signal"),
+            (p.gap_low <= p.gap_high, "empty timing window"),
+            (
+                p.from_capacity != "quantity" or {p.from_qty_field, p.to_qty_field} <= known_fields,
+                "unknown quantity field",
+            ),
+            (p.from_capacity != "any" or bool(p.gap_signal), "rule constrains nothing"),
+            (p.signature not in seen, "same as an earlier rule"),
+        ]
+        failed = [why for ok, why in checks if not ok]
+        if failed:
+            if filtered is not None:
+                filtered.append({**p.as_dict(), "filtered_because": failed})
+            continue
+        seen.add(p.signature)
+        out.append(p)
     return out
 
 

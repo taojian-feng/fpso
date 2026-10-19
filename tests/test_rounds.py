@@ -193,3 +193,20 @@ def test_quantity_capacity_breaks_manifest_ties(run_dirs):
         gap_high=8,
     )
     _assert_breaks_ties(_assignment_accuracy(run_dirs["A"], p))
+
+
+def test_invalid_proposals_are_reported_with_reasons():
+    from fpso.resolution.induce import propose
+
+    bad = {**COMPONENT_RULE, "gap_signal": "no_such_signal"}
+    client = ModelClient(StubBackend(responder=lambda m, p, s: {"patterns": [bad]}))
+    evidence = {
+        "link_type": "component_po_line",
+        "source_fields": ["BDMNG"],
+        "target_fields": ["MENGE"],
+        "confirmed_signal_stats": {"need_minus_delivery_days": None},
+        "unsure_targets": 3,
+    }
+    filtered: list[dict] = []
+    assert propose(client, evidence, [], 1, filtered=filtered) == []
+    assert filtered[0]["filtered_because"] == ["unknown timing signal"]

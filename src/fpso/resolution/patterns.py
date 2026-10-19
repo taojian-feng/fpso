@@ -135,7 +135,7 @@ def apply_patterns(
     cands: list[Candidate],
     connectors: dict[str, Connector],
 ) -> list[Adjudication]:
-    """Adjust model confidence with confirmed patterns; calibration then decides the rest."""
+    """Cut model confidence on pairs confirmed patterns rule out; calibration decides the rest."""
     out = list(adjs)
     for p in patterns:
         if p.status != "confirmed":
@@ -144,12 +144,11 @@ def apply_patterns(
         adjusted = []
         for a in out:
             d = decided.get(a.pair) if a.link_type == p.link_type else None
-            if d is True and a.verdict != "no_match":
-                a = replace(
-                    a,
-                    confidence=round((a.confidence + 1) / 2, 4),
-                    evidence=f"{a.evidence} [pattern {p.id} assigns]",
-                )
+            # A pattern only rules look-alikes out. Assigned pairs keep the model's
+            # confidence: on tied look-alikes the assignment is right too rarely (about
+            # 60-90% on synthetic data) to lift a link to auto-accept by itself.
+            if d is True:
+                a = replace(a, evidence=f"{a.evidence} [pattern {p.id} assigns]")
             elif d is False:
                 a = replace(
                     a,
