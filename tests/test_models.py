@@ -4,7 +4,14 @@ from types import SimpleNamespace
 import pytest
 
 from fpso.governance import ActionLog
-from fpso.models import BedrockBackend, ModelClient, ModelRefused, StubBackend, client_from_env
+from fpso.models import (
+    AnthropicBackend,
+    BedrockBackend,
+    ModelClient,
+    ModelRefused,
+    StubBackend,
+    client_from_env,
+)
 
 SCHEMA = {
     "type": "object",
@@ -79,3 +86,25 @@ def test_bedrock_refusal_raises():
 def test_env_defaults_to_stub(monkeypatch):
     monkeypatch.delenv("FPSO_MODEL_BACKEND", raising=False)
     assert isinstance(client_from_env().backend, StubBackend)
+
+
+def test_anthropic_backend_uses_plain_model_ids():
+    fake = FakeMessages()
+    client = ModelClient(AnthropicBackend(client=SimpleNamespace(messages=fake)))
+    out = client.complete_json(agent="a", role="extract", system="s", prompt="p", schema=SCHEMA)
+    assert out == {"match": "yes", "confidence": 0.9}
+    assert fake.kwargs["model"] == "claude-haiku-5-5"
+    assert "default" not in fake.kwargs["output_config"]["format"]["schema"]
+    assert client.log.total_cost_usd == pytest.approx((1000 * 0.10 + 100 * 0.50) / 1e6)
+
+
+def test_anthropic_refusal_raises():
+    backend = AnthropicBackend(client=SimpleNamespace(messages=FakeMessages("refusal")))
+    with pytest.raises(ModelRefused):
+        backend.complete_json("claude-sonnet-5-5", "", "", SCHEMA, "low")
+
+
+def test_env_selects_anthropic(monkeypatch):
+    monkeypatch.setenv("FPSO_MODEL_BACKEND", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-not-a-real-key")
+    assert isinstance(client_from_env().backend, AnthropicBackend)
