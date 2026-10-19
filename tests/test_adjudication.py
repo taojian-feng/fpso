@@ -43,12 +43,15 @@ def rule_responder(model, prompt, schema):
 
 
 def test_isotonic_is_monotone_and_pools_ties():
-    uppers, values = isotonic_fit([0.1, 0.2, 0.2, 0.3, 0.9], [0, 1, 0, 0, 1])
+    lowers, values = isotonic_fit([0.1, 0.2, 0.2, 0.3, 0.9], [0, 1, 0, 0, 1])
     assert values == sorted(values)
-    assert uppers[-1] == 0.9
+    assert lowers[-1] == 0.9
     cal = Calibrator.fit([0.1, 0.2, 0.2, 0.3, 0.9], [False, True, False, False, True])
     assert cal.predict(0.9) == 1.0
     assert cal.predict(0.2) == cal.predict(0.3)  # 0.2 (0.5) and 0.3 (0) violate, so pool
+    # A confidence never seen in the labels must not borrow the top block's value.
+    assert cal.predict(0.55) == cal.predict(0.3) < 1.0
+    assert cal.predict(0.0) == cal.predict(0.1)
 
 
 def test_threshold_and_ece():
@@ -105,6 +108,10 @@ def test_pipeline_end_to_end_on_stub(run_dir, tmp_path):
     assert (tmp_path / "adjudication.md").read_text().startswith("# Adjudication report")
     assert (tmp_path / "adjudications.jsonl").read_text().count("\n") > 30
     assert any("sim:" in line for line in (tmp_path / "actions.jsonl").read_text().splitlines())
+    stub_calls = ModelClient(StubBackend())
+    again = run_adjudication(run_dir, sample=30, client=stub_calls, out_dir=tmp_path, rescore=True)
+    assert stub_calls.backend.calls == []  # re-scoring makes no model calls
+    assert again["scores"] == report["scores"]
     truth = load_truth(run_dir)
     for lt in LINK_TYPES:
         s = report["scores"][lt]

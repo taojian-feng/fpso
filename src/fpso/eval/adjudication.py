@@ -149,10 +149,17 @@ def run_adjudication(
     workers: int = 4,
     client: ModelClient | None = None,
     out_dir: str | Path | None = None,
+    rescore: bool = False,
 ) -> dict:
     run_dir = Path(run_dir)
     out = Path(out_dir) if out_dir else run_dir / "reports"
     out.mkdir(parents=True, exist_ok=True)
+    prior_cost = 0.0
+    if rescore and (out / "actions.jsonl").exists():
+        for line in (out / "actions.jsonl").read_text().splitlines():
+            rec = json.loads(line)
+            if rec["action"].startswith("model:"):
+                prior_cost += rec.get("cost_usd") or 0.0
     log = ActionLog(out / "actions.jsonl")
     if client is None:
         client = client_from_env(log=log)
@@ -163,15 +170,20 @@ def run_adjudication(
     connectors = open_all(run_dir / "extracts")
     cands = sample_targets(CandidateGenerator(connectors).generate(), sample)
     adjudicator = Adjudicator(connectors, client, max_cost_usd=max_cost_usd, workers=workers)
-    adjs = adjudicator.adjudicate(cands)
-    with (out / "adjudications.jsonl").open("w") as f:
-        for a in adjs:
-            f.write(json.dumps(a.as_dict()) + "\n")
+    saved = out / "adjudications.jsonl"
+    if rescore:
+        # Re-score the model's saved answers: no model calls, so no cost.
+        adjs = [Adjudication(**json.loads(line)) for line in saved.read_text().splitlines()]
+    else:
+        adjs = adjudicator.adjudicate(cands)
+        with saved.open("w") as f:
+            for a in adjs:
+                f.write(json.dumps(a.as_dict()) + "\n")
 
     # Only the scoring step below reads the truth.
     truth = load_truth(run_dir)
     reviewers = {r.name: r for r in default_reviewers(truth, log=log)}
-    scores = score(adjs, truth, reviewers, client.log.total_cost_usd)
+    scores = score(adjs, truth, reviewers, prior_cost + client.log.total_cost_usd)
     meta = {
         "model": client.role_models["adjudicate"],
         "backend": type(client.backend).__name__,
@@ -192,8 +204,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-cost", type=float, default=5.0, help="stop new calls above this USD")
     ap.add_argument("--workers", type=int, default=4, help="parallel model calls")
     ap.add_argument("--out", help="report directory (default: <run>/reports)")
+    ap.add_argument(
+        "--rescore", action="store_true", help="re-score saved adjudications.jsonl, no model calls"
+    )
     args = ap.parse_args(argv)
-    report = run_adjudication(args.run, args.sample, args.max_cost, args.workers, out_dir=args.out)
+    report = run_adjudication(
+        args.run, args.sample, args.max_cost, args.workers, out_dir=args.out, rescore=args.rescore
+    )
     print(to_markdown(report["run"], report["scores"], report["meta"]))
 
 
