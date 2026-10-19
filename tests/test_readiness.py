@@ -131,3 +131,12 @@ def test_cost_cap_settles_the_soonest_work_first(run_dir):
     # Whatever the cap left open is a question for the planner, never a guessed gap.
     assert capped["scores"]["unverified"] >= full["scores"]["unverified"]
     assert capped["scores"]["gap_precision"] >= full["scores"]["gap_precision"] - 0.05
+
+
+def test_the_cost_cap_is_shared_between_report_dates(run_dir):
+    run = json.loads((run_dir / "truth" / "run.json").read_text())
+    dates = report_dates(date.fromisoformat(run["turnaround"][0]))
+    reports = run_readiness(run_dir, dates, max_cost_usd=0.02, client=ModelClient(StubBackend()))
+    first, second = (r["meta"] for r in reports)
+    assert first["run_cost_usd"] < 0.02 / 2 + 0.005  # the first date keeps to its half
+    assert second["cost_usd"] > 0

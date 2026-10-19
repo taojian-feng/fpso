@@ -349,6 +349,11 @@ class ReadinessAgent:
 
     # The walk -------------------------------------------------------------------------
 
+    def set_cap(self, usd: float) -> None:
+        self.max_cost_usd = usd
+        if self.adjudicator:
+            self.adjudicator.max_cost_usd = usd
+
     def over_budget(self) -> bool:
         return (
             self.client is not None
@@ -357,8 +362,10 @@ class ReadinessAgent:
         )
 
     def _settle(self, comps: list, as_of: date) -> None:
-        """Settle the whole chain for these components: their PO lines, then those lines'
-        manifest lines and supplier emails, then read the emails."""
+        """Settle the whole chain for these components: their PO lines, then those POs'
+        supplier emails and reading them, then the lines' manifest lines. Emails come
+        before manifests: past the cost cap an unread email leaves the component
+        unverified, while an open manifest group often does not decide it."""
         keys = {c.key for c in comps}
         need = {c.key: parse_date(c.fields["BDTER"]) or date.max for c in comps}
         self.resolve(
@@ -368,15 +375,13 @@ class ReadinessAgent:
         po_line_of = self._po_lines_of(keys)
         lines = set(po_line_of.values())
         pos = {self.po_lines[k].fields["EBELN"] for k in lines}
-        self.resolve(
-            self._leading_targets("po_line_manifest_line", lines)
-            | self._leading_targets("po_email", pos)
-        )
+        self.resolve(self._leading_targets("po_email", pos))
         for po in sorted(pos):
             for msg_key in self.linked_from("po_email", po):
                 msg = self.c["supplier-mail"].get("message", msg_key)
                 if parse_date(msg.fields["date"]) <= as_of:
                     self.read_email(msg_key)
+        self.resolve(self._leading_targets("po_line_manifest_line", lines))
 
     def _po_lines_of(self, comp_keys: set[str]) -> dict[str, str]:
         out = {}
@@ -423,8 +428,8 @@ class ReadinessAgent:
                 parse_date(f["BDTER"]),
                 self.stock.get(f["MATNR"], 0),
             )
-            if c.key in open_supply:
-                facts.unsettled.add("supply")
+            if c.key in open_supply and not pl_key:
+                facts.unsettled.add("supply")  # with a PO line accepted, supply is known
             if pl_key:
                 if pl_key in open_shipment:
                     facts.unsettled.add("shipment")
@@ -630,7 +635,12 @@ def run_readiness(
     world = None
     reports = []
     spent = 0.0
-    for d in as_of or []:
+    dates = as_of or []
+    for i, d in enumerate(dates):
+        if max_cost_usd is not None:
+            # Each report date may spend up to its share of the cap, plus what earlier
+            # dates left unspent, so a later report can still read its new emails.
+            agent.set_cap(max_cost_usd * (i + 1) / len(dates))
         facts = agent.facts(d)
         total = client.log.total_cost_usd if client else 0.0
         # Only the scoring below reads the truth.
@@ -663,6 +673,16 @@ def run_readiness(
                 {**f.sources(), "need": f.need.isoformat(), "open": sorted(f.unsettled)}
                 for f in facts
                 if assess(f) == "unverified"
+            ],
+            # On-track components too, so a missed gap can be traced to the link behind it.
+            "on_track": [
+                {
+                    **f.sources(),
+                    "need": f.need.isoformat(),
+                    "shipped": [str(s[0]) for s in f.shipments],
+                }
+                for f in facts
+                if assess(f) is None
             ],
         }
         (out_dir / f"{d.isoformat()}.json").write_text(json.dumps(report, indent=2, default=str))
