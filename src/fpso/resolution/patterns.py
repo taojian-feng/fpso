@@ -12,8 +12,8 @@ assignment, which covers the ties the model cannot break on its own:
 
 The assignment runs over every candidate of the link type, not just the sampled ones,
 because a source record taken by one target is unavailable to all the others. Records
-already tied by a strong rule score are assigned first, then the rest in order of how
-close their timing is to the middle of the window.
+tied by a strong rule score are assigned first; after that a target is assigned only
+when the rule leaves it a single feasible candidate, so ties stay with the model.
 """
 
 from __future__ import annotations
@@ -76,7 +76,6 @@ def resolve(
     (from_src, from_type), (to_src, to_type) = LINK_ENDS[pattern.link_type]
     rows = [c for c in cands if c.link_type == pattern.link_type]
     use_gap = bool(pattern.gap_signal)
-    mid = (pattern.gap_low + pattern.gap_high) / 2
 
     def gap(c: Candidate) -> float | None:
         v = c.signals.get(pattern.gap_signal) if use_gap else None
@@ -100,31 +99,42 @@ def resolve(
         q = _qty(connectors[to_src].get(to_type, c.to_key), pattern.to_qty_field)
         return q or 1
 
-    def order(c: Candidate):
-        g = gap(c)
-        return (
-            c.score < STRONG_RULE_SCORE,
-            abs(g - mid) if g is not None else float("inf"),
-            -c.score,
-            c.from_key,
-            c.to_key,
-        )
-
+    # Constraint propagation, so every decision follows from the rule: strong rule
+    # matches are taken as given, then a target whose only feasible candidate is left is
+    # assigned to it, until nothing changes. Ties between look-alikes stay undecided:
+    # picking one would be a coin flip, and ruling the other out would be no better.
+    by_target: dict[str, list[Candidate]] = defaultdict(list)
+    for c in rows:
+        by_target[c.to_key].append(c)
     assigned: dict[str, str] = {}
     used: dict[str, float] = defaultdict(float)
-    for c in sorted(rows, key=order):
-        if c.to_key in assigned or not in_window(c):
-            continue
-        if used[c.from_key] + demand(c) > capacity(c.from_key):
-            continue
+
+    def take(c: Candidate) -> None:
         assigned[c.to_key] = c.from_key
         used[c.from_key] += demand(c)
+
+    def feasible(c: Candidate) -> bool:
+        return in_window(c) and used[c.from_key] + demand(c) <= capacity(c.from_key)
+
+    for c in sorted(rows, key=lambda c: (-c.score, c.from_key, c.to_key)):
+        if c.score >= STRONG_RULE_SCORE and c.to_key not in assigned and feasible(c):
+            take(c)
+    changed = True
+    while changed:
+        changed = False
+        for to_key in sorted(by_target):
+            if to_key in assigned:
+                continue
+            left = [c for c in by_target[to_key] if feasible(c)]
+            if len(left) == 1:
+                take(left[0])
+                changed = True
 
     out = {}
     for c in rows:
         if assigned.get(c.to_key) == c.from_key:
             out[c.pair] = True
-        elif c.to_key in assigned or used[c.from_key] >= capacity(c.from_key):
+        elif c.to_key in assigned or not feasible(c):
             out[c.pair] = False
     return out
 

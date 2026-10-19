@@ -36,8 +36,10 @@ Propose at most two general rules that would break these ties, in this vocabular
 A capacity rule alone rarely separates look-alikes that share a part and a quantity;
 pair it with a timing window when the confirmed links' signal statistics are tight.
 Rules already decided are listed with the example links the reviewer marked wrong and
-their signals. Do not propose a rejected rule again in other words: change what made
-those examples wrong, or propose nothing.
+their signals. Do not propose a rejected rule again in other words: compare the wrong
+examples' signals with the confirmed links' statistics and change what let them through,
+most often by adding or narrowing a timing window. Say in notes why you proposed what
+you did, or why nothing.
 Only propose a rule the evidence supports; an empty list is a fine answer. Write the
 statement as one plain sentence a planner or materials coordinator could confirm."""
 
@@ -70,11 +72,12 @@ SCHEMA = {
                 ],
                 "additionalProperties": False,
             },
-        }
+        },
+        "notes": {"type": "string"},
     },
-    "required": ["patterns"],
+    "required": ["patterns", "notes"],
     "additionalProperties": False,
-    "default": {"patterns": []},
+    "default": {"patterns": [], "notes": ""},
 }
 
 
@@ -176,8 +179,10 @@ def propose(
     round_no: int,
     cands: list[Candidate] | None = None,
     filtered: list[dict] | None = None,
+    notes: dict[str, str] | None = None,
 ) -> list[Pattern]:
-    """Validated new rules. Proposals that fail validation go to ``filtered``, with why."""
+    """Validated new rules. Proposals that fail validation go to ``filtered``, with why,
+    and the model's own account of its answer goes to ``notes`` under the link type."""
     lt = evidence["link_type"]
     body = {**evidence, "already_decided": decided_for_prompt(existing, lt, cands)}
     if not evidence["unsure_targets"]:
@@ -190,6 +195,8 @@ def propose(
         schema=SCHEMA,
         effort="high",
     )
+    if notes is not None:
+        notes[lt] = str(data.get("notes", ""))
     known_fields = set(evidence["source_fields"]) | set(evidence["target_fields"])
     known_signals = set(evidence["confirmed_signal_stats"])
     seen = {p.signature for p in existing}

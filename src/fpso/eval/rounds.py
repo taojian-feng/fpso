@@ -275,6 +275,10 @@ def to_markdown(run: dict, n: int, scores: dict, meta: dict) -> str:
             lines += ["", "No new patterns were proposed this round."]
         for f in meta.get("patterns_filtered") or []:
             lines.append(f"- Filtered out ({', '.join(f['filtered_because'])}): {f['statement']}")
+        notes = {lt: t for lt, t in (meta.get("induce_notes") or {}).items() if t}
+        if notes:
+            lines += ["", "Inducer notes:", ""]
+            lines += [f"- {lt}: {t}" for lt, t in notes.items()]
         unsure = meta.get("induction_unsure_targets")
         if unsure:
             lines += [
@@ -376,6 +380,7 @@ def run_round(
     new_patterns: list[Pattern] = []
     filtered: list[dict] = []
     unsure_targets: dict[str, int] = {}
+    induce_notes: dict[str, str] = {}
     if n >= 1 and not rescore:
         current = apply_patterns(adjs, patterns, cands, connectors)
         labels = dev_labels(current, gold, truth, reviewers)
@@ -383,7 +388,9 @@ def run_round(
         for lt in LINK_TYPES:
             evidence = evidence_for(lt, current, labels[lt][0], cands, connectors)
             unsure_targets[lt] = evidence["unsure_targets"]
-            for p in propose(client, evidence, patterns + new_patterns, n, cands, filtered):
+            for p in propose(
+                client, evidence, patterns + new_patterns, n, cands, filtered, induce_notes
+            ):
                 p.examples = [
                     list(e) for e in examples_for(p, current, cands, connectors, dev_targets)
                 ]
@@ -416,6 +423,7 @@ def run_round(
         "patterns_in_force": [p.id for p in all_patterns if p.status == "confirmed"],
         "patterns_this_round": [p.as_dict() for p in new_patterns],
         "patterns_filtered": filtered if not rescore else prior.get("patterns_filtered", []),
+        "induce_notes": induce_notes if not rescore else prior.get("induce_notes", {}),
         "induction_unsure_targets": unsure_targets
         if not rescore
         else prior.get("induction_unsure_targets", {}),
