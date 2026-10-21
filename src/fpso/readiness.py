@@ -620,11 +620,12 @@ def run_readiness(
     workers: int = 4,
     client: ModelClient | None = None,
     use_model: bool = True,
+    final: bool = False,
 ) -> list[dict]:
     run_dir = Path(run_dir)
     run = json.loads((run_dir / "truth" / "run.json").read_text())
-    if run["profile"] == "B":
-        raise SystemExit("Profile B is held back for the final run.")
+    if run["profile"] == "B" and not final:
+        raise SystemExit("Profile B is held back for the final run; pass --final to use it.")
     out_dir = run_dir / "reports" / "readiness"
     out_dir.mkdir(parents=True, exist_ok=True)
     log = ActionLog(out_dir / "actions.jsonl")
@@ -742,11 +743,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-cost", type=float, default=5.0, help="stop new calls above this USD")
     ap.add_argument("--workers", type=int, default=4, help="parallel model calls")
     ap.add_argument("--no-model", action="store_true", help="rule links only, no email reading")
+    ap.add_argument("--final", action="store_true", help="allow the held-back profile B")
     args = ap.parse_args(argv)
     run = json.loads((Path(args.run) / "truth" / "run.json").read_text())
     dates = args.as_of or report_dates(date.fromisoformat(run["turnaround"][0]))
     for r in run_readiness(
-        args.run, dates, args.max_cost, args.workers, use_model=not args.no_model
+        args.run, dates, args.max_cost, args.workers, use_model=not args.no_model, final=args.final
     ):
         s = r["scores"]
         print(

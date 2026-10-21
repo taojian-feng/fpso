@@ -218,3 +218,27 @@ def test_invalid_proposals_are_reported_with_reasons():
     filtered: list[dict] = []
     assert propose(client, evidence, [], 1, filtered=filtered) == []
     assert filtered[0]["filtered_because"] == ["unknown timing signal"]
+
+
+def test_final_run_applies_profile_a_patterns_and_induces_none(run_dirs, tmp_path):
+    carried = tmp_path / "patterns.json"
+    rule = Pattern(
+        id="carried",
+        link_type="component_po_line",
+        statement="carried from A",
+        status="confirmed",
+        round=1,
+    )
+    carried.write_text(json.dumps([rule.as_dict()]))
+    # The responder would propose a pattern if asked; the final run must not ask.
+    r = run_round(
+        run_dirs["B"],
+        1,
+        per_type=5,
+        client=ModelClient(StubBackend(responder=responder)),
+        final=True,
+        patterns_from=carried,
+    )
+    assert r["meta"]["patterns_this_round"] == []
+    assert r["meta"]["patterns_in_force"] == ["carried"]
+    assert json.loads((run_dirs["B"] / "reports" / "patterns.json").read_text()) == [rule.as_dict()]
