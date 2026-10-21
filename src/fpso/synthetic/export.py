@@ -113,24 +113,27 @@ def export(world: World, out_dir: str | Path, profile: str = "A") -> dict:
         ["LIFNR", "NAME1", "SMTP_ADDR"],
         [[v.vendor_id, v.name, f"orders@{v.domain}"] for v in world.vendors],
     )
-    _write_csv(
-        ex / "erp_mm" / "po_lines.csv",
-        ["EBELN", "EBELP", "LIFNR", "MATNR", "TXZ01", "MENGE", "BEDAT", "EINDT", "AUFNR"],
-        [
-            [
-                pl.po_no,
-                pl.item,
-                pl.vendor_id,
-                pl.mat_no,
-                mat_by_no[pl.mat_no].description[:40],
-                pl.qty,
-                _sap_date(pl.order_date),
-                _sap_date(pl.delivery_date),
-                "" if c.chance("erp_po_wo_missing") else pl.wo_no,
-            ]
-            for pl in world.po_lines
-        ],
-    )
+    po_header = ["EBELN", "EBELP", "LIFNR", "MATNR", "TXZ01", "MENGE", "BEDAT", "EINDT", "AUFNR"]
+    po_rows = []
+    for pl in world.po_lines:
+        row = [
+            pl.po_no,
+            pl.item,
+            pl.vendor_id,
+            pl.mat_no,
+            mat_by_no[pl.mat_no].description[:40],
+            pl.qty,
+            _sap_date(pl.order_date),
+            _sap_date(pl.delivery_date),
+            "" if c.chance("erp_po_wo_missing") else pl.wo_no,
+        ]
+        has_res = c.extra("po_reservation_ref")
+        if has_res is not None:  # reservation the line was bought for (profile C)
+            row += pl.component_key.rsplit("-", 1) if has_res else ["", ""]
+        po_rows.append(row)
+    if "po_reservation_ref" in c.p:
+        po_header += ["RSNUM", "RSPOS"]
+    _write_csv(ex / "erp_mm" / "po_lines.csv", po_header, po_rows)
     _write_csv(
         ex / "erp_mm" / "stock.csv",
         ["MATNR", "WERKS", "LGORT", "LABST"],
@@ -286,22 +289,31 @@ def _write_vessel(world, d: Path, c: Corruptor, pl_by_key, mat_by_no, eq_by_no, 
                 desc += f" FOR {c.tag(eq_by_no[wo.equip_no].tag)}"
             desc = c.typo(desc)
         weight = round(sum(mat_by_no[p.mat_no].unit_weight_kg for p in pls) * ml.qty * 1.1, 1)
-        rows.append(
-            [
-                ml.line_id,
-                ml.sailing_id,
-                c.po_ref(first.po_no, first.item),
-                desc,
-                f"{ml.qty} {c.rng.choice(['EA', 'PCS', 'x', ''])}".strip(),
-                weight,
-                c.rng.choice(["BASKET", "HALF HEIGHT", "CCU", "PALLET"]),
-            ]
-        )
-    _write_csv(
-        d / "manifest_lines.csv",
-        ["line_id", "sailing_id", "customer_ref", "description", "qty", "gross_kg", "unit_type"],
-        rows,
-    )
+        row = [
+            ml.line_id,
+            ml.sailing_id,
+            c.po_ref(first.po_no, first.item),
+            desc,
+            f"{ml.qty} {c.rng.choice(['EA', 'PCS', 'x', ''])}".strip(),
+            weight,
+            c.rng.choice(["BASKET", "HALF HEIGHT", "CCU", "PALLET"]),
+        ]
+        has_item = c.extra("manifest_po_item")
+        if has_item is not None:  # PO number and item of each line packed (profile C)
+            row.append(" ".join(p.key for p in pls) if has_item else "")
+        rows.append(row)
+    header = [
+        "line_id",
+        "sailing_id",
+        "customer_ref",
+        "description",
+        "qty",
+        "gross_kg",
+        "unit_type",
+    ]
+    if "manifest_po_item" in c.p:
+        header.append("po_item_ref")
+    _write_csv(d / "manifest_lines.csv", header, rows)
     return exported
 
 

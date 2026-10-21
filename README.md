@@ -25,6 +25,8 @@ This repository is at **Phase 0**: proving that agents can build that cross-syst
 uv venv && uv pip install -e ".[dev,db,anthropic]"
 fpso-synth --seed 7 --profile A --out data/kestrel-A   # development data
 fpso-synth --seed 7 --profile B --out data/kestrel-B   # held-back data for the final run
+fpso-synth --seed 7 --profile C --out data/kestrel-C   # profile A plus the fields Phase 0 found missing
+fpso-replay --run data/kestrel-A --as-of 2027-02-01 --out data/kestrel-A@2027-02-01  # the extracts as of one day
 fpso-eval --run data/kestrel-A                         # candidate recall + rule baseline report
 fpso-adjudicate --run data/kestrel-A --sample 60        # model-in-the-loop precision/recall (capped at $5)
 fpso-round --run data/kestrel-A --round 0              # measured round on the fixed gold set
@@ -51,7 +53,7 @@ At full size, one run has about 300 equipment items, 190 materials, 1,500 work o
 
 ### Corruption profiles
 
-`A` is the development profile. It covers tag separator and case drift, missing work-order references, abbreviated manifest text, and PO numbers that appear only in email subjects. `B` uses different rules and is held back for the final measurement. It drops train suffixes, merges manifest lines, zero-pads PO numbers, puts PO numbers only in quoted replies, and writes dates day-first. Profiles are versioned in `src/fpso/synthetic/corrupt.py`. Add a new version instead of editing an existing one.
+`A` is the development profile. It covers tag separator and case drift, missing work-order references, abbreviated manifest text, and PO numbers that appear only in email subjects. `B` uses different rules and is held back for the final measurement. It drops train suffixes, merges manifest lines, zero-pads PO numbers, puts PO numbers only in quoted replies, and writes dates day-first. `C` is profile A plus the fields the Phase 0 gate found missing: the reservation a PO line was bought for, and the PO line keys on each manifest line (each present 90% of the time). Comparing C with A shows what asking a real operator for those fields is worth. Profiles are versioned in `src/fpso/synthetic/corrupt.py`. Add a new version instead of editing an existing one.
 
 ## Adjudication run
 
@@ -62,6 +64,10 @@ At full size, one run has about 300 equipment items, 190 materials, 1,500 work o
 `fpso-round` is the harness for the plan's rounds. The first run fixes a gold set in `reports/gold.json`: 80 targets per link type, half easy and half hard, split 25% dev and 75% held-out. Every later round reuses it. On dev targets the simulated reviewers label each candidate pair; every high-confidence pair and a random 20% of the rest get a second reviewer, and pairs where they disagree, or where one of them skipped, are left out of calibration. Held-out targets are scored against `truth/`. Each round writes `reports/rounds/round-<n>.{json,md}` with the model, prompt hash and code commit, plus reviewer agreement and accuracy, and `summary.md` compares rounds. Profile B refuses to run without `--final`.
 
 `fpso-readiness` is the Readiness agent at autonomy level 0. For each report date (by default the turnaround 6 and 5 weeks out) it takes every work order starting 4 to 26 weeks later, walks component, PO line, manifest lines and supplier emails, and gives each component at most one gap: no supply, PO late, supplier slip, or not shipped in time. Components whose gap would rest on a link it could not settle are listed as unverified instead. Links come from decisive rule matches, then the model (reusing the latest round's answers where the prompt is unchanged); the small model reads supplier emails for delays. Reports go to `reports/readiness/<date>.{json,md}` and are scored against the same facts built from the clean world: agreement is the share of work orders whose gap list matches exactly (plan target 80%).
+
+## Replay clock
+
+`fpso-replay` copies a run as it stood on one day, for agents that run daily. It keeps PO lines ordered by that day, supplier emails sent by then, and manifest lines for sailings that depart within 3 days or earlier. Masters, work orders, components, the schedule, sailings and stock stay whole, and `truth/links.csv` keeps only links whose records are visible.
 
 ## Tests
 

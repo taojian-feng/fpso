@@ -1,3 +1,5 @@
+import csv
+
 import pytest
 
 from fpso.connectors import open_all
@@ -100,3 +102,14 @@ def test_reference_signals_point_at_true_links(run_dir):
     # Weaker: the equipment a manifest names, and exact item quantities in an email.
     assert precision(lambda s: s.get("manifest_work_orders") == 1) > 0.7  # few cases
     assert precision(lambda s: s.get("item_qty_match") == 1.0) > 0.6
+
+
+def test_profile_c_fields_make_decisive_candidates(tmp_path):
+    export(build_world(seed=11, scale=0.05), tmp_path, "C")
+    cands = CandidateGenerator(open_all(tmp_path / "extracts")).generate()
+    with (tmp_path / "truth" / "links.csv").open() as f:
+        truth = {(r["link_type"], r["from_key"], r["to_key"]) for r in csv.DictReader(f)}
+    for sig in ("reservation", "po_item_ref"):
+        hits = [c for c in cands if sig in c.signals]
+        assert hits and all(c.score >= 0.9 for c in hits)
+        assert all(c.pair in truth for c in hits), sig

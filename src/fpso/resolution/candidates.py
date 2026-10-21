@@ -232,6 +232,12 @@ class CandidateGenerator:
                 g = pl.fields
                 sig: dict = {"material": f["MATNR"]}
                 score = 0.3
+                if g.get("RSNUM"):  # the reservation the line was bought for (profile C)
+                    if f"{g['RSNUM']}-{g['RSPOS']}" != comp.key:
+                        continue
+                    sig["reservation"] = comp.key
+                    cands.append(Candidate("component_po_line", comp.key, pl.key, 0.95, sig))
+                    continue
                 if g.get("AUFNR") and g["AUFNR"] == f["AUFNR"]:
                     sig["work_order"] = f["AUFNR"]
                     score += 0.5
@@ -280,8 +286,14 @@ class CandidateGenerator:
             pool = (
                 [pl for p in pos for pl in self.lines_by_po[p]] if pos else self.po_lines.values()
             )
+            # PO line keys the vessel tool recorded for the line (profile C).
+            named = [k for k in (f.get("po_item_ref") or "").split() if k in self.po_lines]
             cands = []
-            for pl in pool:
+            for k in named:
+                lag = _days(depart, parse_date(self.po_lines[k].fields["EINDT"]))
+                sig = {"po_item_ref": k, "ship_lag_days": lag}
+                cands.append(Candidate("po_line_manifest_line", k, ml.key, 0.95, sig))
+            for pl in pool if not named else ():
                 g = pl.fields
                 lag = _days(depart, parse_date(g["EINDT"]))
                 if lag is None or not -5 <= lag <= 45:

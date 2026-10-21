@@ -3,6 +3,7 @@
 Each profile is a named, versioned set of probabilities. Profile ``A`` is the development
 profile the pipeline is tuned on. Profile ``B`` uses different messiness rules and is held
 back for the final Phase 0 measurement, so the result is not just overfitting to ``A``.
+Profile ``C`` adds the fields a real operator would be asked for (see below).
 Change a profile only by adding a new version; results cite the version they ran on.
 """
 
@@ -59,6 +60,17 @@ PROFILES: dict[str, dict] = {
     },
 }
 
+# Profile C: profile A's messiness plus the fields the Phase 0 gate found missing, so a run
+# on C shows what asking a real operator for them is worth.
+PROFILES["C"] = {
+    **PROFILES["A"],
+    "version": 1,
+    "description": "Profile A plus the missing fields from the Phase 0 gate: PO item on "
+    "manifest lines and reservation number on PO lines.",
+    "manifest_po_item": 0.9,
+    "po_reservation_ref": 0.9,
+}
+
 ABBREVIATIONS = {
     "MECHANICAL": "MECH",
     "SEAL": "SL",
@@ -96,6 +108,12 @@ class Corruptor:
 
     def chance(self, key: str) -> bool:
         return self.rng.random() < self.p[key]
+
+    def extra(self, key: str) -> bool | None:
+        """Chance for a field only some profiles carry; None (and no draw) when absent."""
+        if key not in self.p:
+            return None
+        return self.chance(key)
 
     def typo(self, text: str) -> str:
         """Swap two adjacent letters in one word, at the profile's typo rate."""
