@@ -35,6 +35,8 @@ fpso-model-check                                       # one tiny call per role 
 pytest -q
 ```
 
+`FPSO_MODEL_<ROLE>` swaps the model for one role, for example `FPSO_MODEL_ADJUDICATE=claude-haiku-5-5` to try a cheaper model for matching.
+
 Each run writes `extracts/`, which is what connectors and agents may read, and `truth/`, which is never shown to agents. The `truth/links.csv` file holds the correct cross-system links for scoring, and `truth/run.json` records the seed, the profile settings and the counts.
 
 At full size, one run has about 300 equipment items, 190 materials, 1,500 work orders, 1,900 PO lines, 70 sailings, 2,100 manifest lines, 1,100 supplier emails and 7,200 true links. Use `--scale` for smaller runs.

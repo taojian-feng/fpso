@@ -227,7 +227,13 @@ def client_from_env(log: ActionLog | None = None) -> ModelClient:
         )
     else:
         backend = StubBackend()
-    return ModelClient(backend, log=log)
+    # FPSO_MODEL_<ROLE> overrides one role's model, e.g. FPSO_MODEL_ADJUDICATE=claude-haiku-5-5.
+    role_models = {
+        role: os.environ[f"FPSO_MODEL_{role.upper()}"]
+        for role in DEFAULT_ROLE_MODELS
+        if os.environ.get(f"FPSO_MODEL_{role.upper()}")
+    }
+    return ModelClient(backend, log=log, role_models=role_models)
 
 
 def main() -> None:
