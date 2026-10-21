@@ -41,7 +41,7 @@ from pathlib import Path
 from fpso.connectors import Connector, open_all
 from fpso.eval.reviewers import default_reviewers
 from fpso.governance import ActionLog
-from fpso.models import ModelClient, client_from_env
+from fpso.models import CachedBackend, ModelClient, client_from_env
 from fpso.resolution.adjudicate import Adjudication, Adjudicator, group_by_target
 from fpso.resolution.candidates import Candidate, CandidateGenerator
 from fpso.resolution.normalize import leading_int, parse_date
@@ -598,6 +598,8 @@ def run_readiness(
             client = client_from_env(log=log)
         else:
             client.log = log
+        # Answers are kept, so a re-run with a bigger cap pays only for new questions.
+        client.backend = CachedBackend(client.backend, out_dir / "answers.jsonl")
     else:
         client = None
     t0 = time.time()
@@ -659,6 +661,7 @@ def run_readiness(
             else None,
             "seconds": round(time.time() - t0, 1),
             "answers_from_round": latest,
+            "answers_kept": client.backend.hits if client else 0,  # reused, not paid for
         }
         report = {
             "run": run,
