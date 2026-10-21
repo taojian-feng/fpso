@@ -56,6 +56,8 @@ BATCH = 40  # groups per model batch, in urgency order
 CHUNK = 25  # components settled end to end at a time, soonest need first
 MAX_SHOWN = 6  # candidates per group shown to the model
 MODEL_ACCEPT = 0.9  # the model's own confidence needed to accept its match
+# A match the model leans towards but won't confirm: the part may be on order after all.
+NEAR_MATCH = 0.5
 LINK_TYPES_USED = ("component_po_line", "po_line_manifest_line", "po_email")
 
 EXTRACT_SYSTEM = """You read one supplier email about a purchase order for an offshore
@@ -106,6 +108,8 @@ class Facts:
 def assess(f: Facts) -> str | None:
     """The component's gap, 'unverified', or None when it should be on board in time."""
     if f.po_line is None:
+        if "near_match" in f.unsettled:
+            return "unverified"  # stock is shared; a half-matched PO line may be its supply
         if f.stock >= f.qty:
             return None
         return "unverified" if "supply" in f.unsettled else "no_supply"
@@ -203,6 +207,7 @@ class ReadinessAgent:
         self.prior_fp = prior_fingerprints
         self.links: dict[tuple[str, str], list[tuple[str, float, str]]] = {}
         self.stats = defaultdict(int)
+        self.near_matches: set[tuple[str, str]] = set()  # (link type, source), see NEAR_MATCH
         self.settled_through: date | None = None
         self.email_reads: dict[str, dict] = {}
         pm, mm = connectors["erp-pm"], connectors["erp-mm"]
@@ -273,6 +278,8 @@ class ReadinessAgent:
             best = max(g, key=lambda a: a.confidence)
             ok = best.verdict == "match" and best.confidence >= MODEL_ACCEPT
             self.links[(lt, to_key)] = [(best.from_key, best.confidence, "model")] if ok else []
+            if not ok and best.verdict == "match" and best.confidence >= NEAR_MATCH:
+                self.near_matches.add((lt, best.from_key))
         for k in groups:
             if k not in self.links and (self.adjudicator is None or not self.over_budget()):
                 self.links[k] = []
@@ -451,6 +458,8 @@ class ReadinessAgent:
             )
             if c.key in open_supply and not pl_key:
                 facts.unsettled.add("supply")  # with a PO line accepted, supply is known
+                if ("component_po_line", c.key) in self.near_matches:
+                    facts.unsettled.add("near_match")
             if pl_key:
                 if pl_key in open_shipment:
                     facts.unsettled.add("shipment")
