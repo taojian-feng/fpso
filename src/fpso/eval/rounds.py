@@ -348,7 +348,10 @@ def run_round(
     client: ModelClient | None = None,
     rescore: bool = False,
     final: bool = False,
+    patterns_from: str | Path | None = None,
 ) -> dict:
+    """One measured round. The final run (profile B) applies the patterns confirmed on
+    profile A, read from ``patterns_from``, and induces none: B is never tuned on."""
     run_dir = Path(run_dir)
     run = json.loads((run_dir / "truth" / "run.json").read_text())
     if run["profile"] == "B" and not final:
@@ -423,12 +426,18 @@ def run_round(
     truth = load_truth(run_dir)
     reviewers = {r.name: r for r in default_reviewers(truth, log=log)}
     patterns_path = reports / "patterns.json"
-    patterns = [Pattern(**p) for p in _read_patterns(patterns_path) if p["round"] < n]
+    if final and patterns_from and not rescore:
+        # Carry profile A's patterns over unchanged, and keep a copy beside B's reports.
+        patterns_path.write_text(Path(patterns_from).read_text())
+    if final:
+        patterns = [Pattern(**p) for p in _read_patterns(patterns_path)]
+    else:
+        patterns = [Pattern(**p) for p in _read_patterns(patterns_path) if p["round"] < n]
     new_patterns: list[Pattern] = []
     filtered: list[dict] = []
     unsure_targets: dict[str, int] = {}
     induce_notes: dict[str, str] = {}
-    if n >= 1 and not rescore:
+    if n >= 1 and not rescore and not final:
         current = apply_patterns(adjs, patterns, cands, connectors)
         labels = dev_labels(current, gold, truth, reviewers)
         dev_targets = {(g.link_type, g.to_key) for g in gold if g.split == "dev"}
@@ -450,7 +459,7 @@ def run_round(
         patterns_path.write_text(
             json.dumps([p.as_dict() for p in patterns + new_patterns], indent=1)
         )
-    elif rescore:
+    elif rescore and not final:
         new_patterns = [Pattern(**p) for p in _read_patterns(patterns_path) if p["round"] == n]
     all_patterns = patterns + new_patterns
     final_adjs = apply_patterns(adjs, all_patterns, cands, connectors)
@@ -497,6 +506,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--workers", type=int, default=4, help="parallel model calls")
     ap.add_argument("--rescore", action="store_true", help="re-score saved answers, no calls")
     ap.add_argument("--final", action="store_true", help="allow the held-back profile B")
+    ap.add_argument(
+        "--patterns-from",
+        help="with --final: the profile A patterns.json to apply (no new patterns are induced)",
+    )
     args = ap.parse_args(argv)
     report = run_round(
         args.run,
@@ -506,6 +519,7 @@ def main(argv: list[str] | None = None) -> None:
         args.workers,
         rescore=args.rescore,
         final=args.final,
+        patterns_from=args.patterns_from,
     )
     print(to_markdown(report["run"], report["round"], report["scores"], report["meta"]))
 

@@ -128,6 +128,8 @@ def test_reports_are_written_and_profile_b_is_held_back(run_dir, tmp_path):
     export(build_world(seed=11, scale=0.05), b, "B")
     with pytest.raises(SystemExit):
         run_readiness(b, dates[:1], use_model=False)
+    final = run_readiness(b, dates[:1], use_model=False, final=True)
+    assert final[0]["run"]["profile"] == "B"
 
 
 def test_cost_cap_settles_the_soonest_work_first(run_dir):
