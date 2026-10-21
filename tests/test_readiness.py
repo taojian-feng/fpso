@@ -30,6 +30,12 @@ def run_dir(tmp_path_factory):
     return d
 
 
+@pytest.fixture(autouse=True)
+def no_kept_answers(run_dir):
+    """Each test starts with no answers kept from an earlier run."""
+    (run_dir / "reports" / "readiness" / "answers.jsonl").unlink(missing_ok=True)
+
+
 def read_email_like_a_person(prompt):
     """What a careful reader gets from a slip notice; stands in for the extraction model."""
     m = re.search(r"New expected dispatch: (.+)", prompt)
@@ -124,6 +130,7 @@ def test_cost_cap_settles_the_soonest_work_first(run_dir):
     run = json.loads((run_dir / "truth" / "run.json").read_text())
     d = report_dates(date.fromisoformat(run["turnaround"][0]))[0]
     full = run_readiness(run_dir, [d], client=ModelClient(StubBackend()))[0]
+    (run_dir / "reports" / "readiness" / "answers.jsonl").unlink()
     capped = run_readiness(run_dir, [d], max_cost_usd=0.02, client=ModelClient(StubBackend()))[0]
     assert capped["meta"]["run_cost_usd"] < full["meta"]["run_cost_usd"]
     settled = capped["meta"]["model_settled_through"]
@@ -140,3 +147,13 @@ def test_the_cost_cap_is_shared_between_report_dates(run_dir):
     first, second = (r["meta"] for r in reports)
     assert first["run_cost_usd"] < 0.02 / 2 + 0.005  # the first date keeps to its half
     assert second["cost_usd"] > 0
+
+
+def test_a_rerun_pays_only_for_new_questions(run_dir):
+    run = json.loads((run_dir / "truth" / "run.json").read_text())
+    d = report_dates(date.fromisoformat(run["turnaround"][0]))[0]
+    capped = run_readiness(run_dir, [d], max_cost_usd=0.02, client=ModelClient(StubBackend()))[0]
+    again = run_readiness(run_dir, [d], max_cost_usd=0.02, client=ModelClient(StubBackend()))[0]
+    assert again["meta"]["answers_kept"] > 0
+    # Kept answers cost nothing, so the same cap now gets through more questions.
+    assert again["meta"]["links"]["model_asked"] > capped["meta"]["links"]["model_asked"]

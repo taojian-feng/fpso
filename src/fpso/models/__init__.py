@@ -15,10 +15,13 @@ Pick one with ``client_from_env()``: ``FPSO_MODEL_BACKEND=anthropic`` uses
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 from fpso.governance import ActionLog, ActionRecord
@@ -63,6 +66,40 @@ class Backend(Protocol):
     def complete_json(
         self, model: str, system: str, prompt: str, schema: dict[str, Any], effort: str
     ) -> ModelResult: ...
+
+
+class CachedBackend:
+    """Wraps a backend so a question asked before is answered from a file, at no cost.
+
+    A capped run that is re-run with a bigger cap then pays only for the new questions."""
+
+    def __init__(self, inner: Backend, path: str | Path):
+        self.inner = inner
+        self.path = Path(path)
+        self.hits = 0
+        self._lock = threading.Lock()
+        self._answers: dict[str, dict[str, Any]] = {}
+        if self.path.exists():
+            for line in self.path.read_text().splitlines():
+                row = json.loads(line)
+                self._answers[row["key"]] = row["data"]
+
+    @staticmethod
+    def key(model: str, system: str, prompt: str, effort: str) -> str:
+        return hashlib.sha256("\x1f".join((model, system, prompt, effort)).encode()).hexdigest()
+
+    def complete_json(self, model, system, prompt, schema, effort):
+        k = self.key(model, system, prompt, effort)
+        with self._lock:
+            if k in self._answers:
+                self.hits += 1
+                return ModelResult(self._answers[k], model)
+        result = self.inner.complete_json(model, system, prompt, schema, effort)
+        with self._lock:
+            self._answers[k] = result.data
+            with self.path.open("a") as f:
+                f.write(json.dumps({"key": k, "data": result.data}) + "\n")
+        return result
 
 
 @dataclass
