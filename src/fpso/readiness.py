@@ -43,7 +43,7 @@ from fpso.eval.reviewers import default_reviewers
 from fpso.governance import ActionLog
 from fpso.models import CachedBackend, ModelClient, client_from_env
 from fpso.resolution.adjudicate import Adjudication, Adjudicator, group_by_target
-from fpso.resolution.candidates import Candidate, CandidateGenerator
+from fpso.resolution.candidates import EMAIL_ITEM_RE, Candidate, CandidateGenerator
 from fpso.resolution.normalize import leading_int, parse_date
 from fpso.resolution.patterns import Pattern, apply_patterns
 from fpso.synthetic.truth import World, build_world
@@ -218,6 +218,9 @@ class ReadinessAgent:
         self.part_to_material = {
             r.fields["MFRPN"]: r.key for r in mm.iter("material") if r.fields.get("MFRPN")
         }
+        self.lines_by_po_material: dict[tuple[str, str], list] = defaultdict(list)
+        for r in self.po_lines.values():
+            self.lines_by_po_material[(r.fields["EBELN"], r.fields["MATNR"])].append(r)
 
     # Links ----------------------------------------------------------------------------
 
@@ -347,6 +350,24 @@ class ReadinessAgent:
         self.email_reads[key] = out
         return out
 
+    def _slip_fits_line(self, msg, pl: dict) -> bool | None:
+        """Whether a delay email about this PO's material concerns this line.
+
+        A PO can order one material on several lines. The email's quoted quantity then
+        tells them apart; None when it cannot."""
+        same = self.lines_by_po_material[(pl["EBELN"], pl["MATNR"])]
+        if len(same) < 2:
+            return True
+        quoted = {
+            int(q)
+            for part, q in EMAIL_ITEM_RE.findall(msg.fields["body"])
+            if self.part_to_material.get(part) == pl["MATNR"]
+        }
+        fits = [r for r in same if (leading_int(r.fields["MENGE"]) or 0) in quoted]
+        if len(fits) == 1:
+            return fits[0].fields is pl
+        return None
+
     # The walk -------------------------------------------------------------------------
 
     def set_cap(self, usd: float) -> None:
@@ -452,7 +473,12 @@ class ReadinessAgent:
                     if not read.get("is_delay") or new is None:
                         continue
                     mats = {self.part_to_material.get(p) for p in read.get("parts", [])}
-                    if not read.get("parts") or pl["MATNR"] in mats:
+                    if read.get("parts") and pl["MATNR"] not in mats:
+                        continue
+                    match = self._slip_fits_line(msg, pl)
+                    if match is None:
+                        facts.unsettled.add("email")  # which of the look-alike lines is late?
+                    elif match:
                         facts.slips.append((new, msg_key))
             out.append(facts)
         return out
