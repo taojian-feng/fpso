@@ -51,6 +51,10 @@ def test_gap_order_and_unverified():
     assert assess(f) == "no_supply"
     f.unsettled.add("supply")
     assert assess(f) == "unverified"  # an open link is a question, not a gap
+    f = Facts("c", "wo", "m", 2, need, stock=5)
+    assert assess(f) is None  # in stock, nothing on order
+    f.unsettled |= {"supply", "near_match"}
+    assert assess(f) == "unverified"  # the model half-matched a PO line: may be its supply
     f = Facts("c", "wo", "m", 2, need, stock=0, po_line="p", delivery=date(2027, 4, 1))
     assert assess(f) == "not_shipped"
     f.shipments = [(date(2027, 4, 5), 1, "ML-1"), (date(2027, 4, 12), 1, "ML-2")]
