@@ -108,3 +108,10 @@ def test_env_selects_anthropic(monkeypatch):
     monkeypatch.setenv("FPSO_MODEL_BACKEND", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-not-a-real-key")
     assert isinstance(client_from_env().backend, AnthropicBackend)
+
+
+def test_env_overrides_one_roles_model(monkeypatch):
+    monkeypatch.setenv("FPSO_MODEL_ADJUDICATE", "claude-haiku-5-5")
+    client = client_from_env()
+    assert client.role_models["adjudicate"] == "claude-haiku-5-5"
+    assert client.role_models["induce"] == "claude-opus-5-5"
