@@ -13,10 +13,15 @@ from fpso.synthetic.truth import build_world
 
 EXPECTED_TYPES = {
     "erp-pm": {"equipment", "work_order", "component"},
-    "erp-mm": {"material", "vendor", "po", "po_line", "stock"},
+    "erp-mm": {"material", "vendor", "po", "po_line", "stock", "material_price"},
     "p6": {"activity"},
-    "vessel": {"sailing", "manifest_line"},
+    "vessel": {"sailing", "manifest_line", "sailing_capacity"},
     "supplier-mail": {"message"},
+    "helicopter": {"flight"},
+    "marine-ops": {"crane_day"},
+    "warehouse": {"store_balance"},
+    "weather": {"observation", "forecast"},
+    "historian": {"vibration"},
 }
 
 

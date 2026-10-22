@@ -23,6 +23,8 @@ fpso-round = "fpso.eval.rounds:main"
 fpso-readiness = "fpso.readiness:main"
 fpso-replay = "fpso.synthetic.replay:main"
 fpso-procure = "fpso.procurement:main"
+fpso-logistics = "fpso.phase2:main"
+fpso-orchestrate = "fpso.phase3:main"
 
 [build-system]
 requires = ["hatchling"]

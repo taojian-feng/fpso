@@ -49,6 +49,9 @@ class ErpMmConnector(Connector):
             self._add(
                 "stock", f"{row['MATNR']}-{row['WERKS']}-{row['LGORT']}", row, d / "stock.csv"
             )
+        if (d / "material_prices.csv").exists():  # Phase 2
+            for row in read_csv(d / "material_prices.csv"):
+                self._add("material_price", row["MATNR"], row, d / "material_prices.csv")
 
 
 class P6Connector(Connector):
@@ -111,6 +114,9 @@ class VesselConnector(Connector):
             self._add("sailing", row["sailing_id"], row, d / "sailings.csv")
         for row in read_csv(d / "manifest_lines.csv"):
             self._add("manifest_line", row["line_id"], row, d / "manifest_lines.csv")
+        if (d / "sailing_capacity.csv").exists():  # Phase 2
+            for row in read_csv(d / "sailing_capacity.csv"):
+                self._add("sailing_capacity", row["sailing_id"], row, d / "sailing_capacity.csv")
 
 
 class SupplierMailConnector(Connector):
@@ -132,9 +138,79 @@ class SupplierMailConnector(Connector):
             self._add("message", path.stem, fields, path)
 
 
+class HelicopterConnector(Connector):
+    name = "helicopter"
+    description = "Helicopter flight list: seats, passengers booked and cargo payload per flight."
+
+    def load(self) -> None:
+        path = self.root / "helicopter" / "flights.csv"
+        if path.exists():
+            for row in read_csv(path):
+                self._add("flight", row["flight_id"], row, path)
+
+
+class MarineOpsConnector(Connector):
+    name = "marine-ops"
+    description = "Marine operations calendar: deck cranes available and bunkering days."
+
+    def load(self) -> None:
+        path = self.root / "marine_ops" / "crane_ops.csv"
+        if path.exists():
+            for row in read_csv(path):
+                self._add("crane_day", row["date"], row, path)
+
+
+class WarehouseConnector(Connector):
+    name = "warehouse"
+    description = "Store balances offshore and on the sister asset, with reservations."
+
+    def load(self) -> None:
+        path = self.root / "warehouse" / "stock_locations.csv"
+        if path.exists():
+            for row in read_csv(path):
+                key = f"{row['MATNR']}-{row['WERKS']}-{row['LGORT']}"
+                self._add("store_balance", key, row, path)
+
+
+class WeatherConnector(Connector):
+    name = "weather"
+    description = "Met-ocean service: observed wave height and wind, and daily 5-day forecasts."
+
+    def load(self) -> None:
+        d = self.root / "weather"
+        if (d / "observed.csv").exists():
+            for row in read_csv(d / "observed.csv"):
+                self._add("observation", row["date"], row, d / "observed.csv")
+            for row in read_csv(d / "forecasts.csv"):
+                key = f"{row['issued']}|{row['valid']}"
+                self._add("forecast", key, row, d / "forecasts.csv")
+
+
+class HistorianConnector(Connector):
+    name = "historian"
+    description = "Process historian: daily vibration readings of rotating equipment."
+
+    def load(self) -> None:
+        path = self.root / "historian" / "vibration.csv"
+        if path.exists():
+            for row in read_csv(path):
+                self._add("vibration", f"{row['EQUNR']}|{row['date']}", row, path)
+
+
 CONNECTORS: dict[str, type[Connector]] = {
     c.name: c
-    for c in (ErpPmConnector, ErpMmConnector, P6Connector, VesselConnector, SupplierMailConnector)
+    for c in (
+        ErpPmConnector,
+        ErpMmConnector,
+        P6Connector,
+        VesselConnector,
+        SupplierMailConnector,
+        HelicopterConnector,
+        MarineOpsConnector,
+        WarehouseConnector,
+        WeatherConnector,
+        HistorianConnector,
+    )
 }
 
 

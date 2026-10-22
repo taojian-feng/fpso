@@ -15,6 +15,8 @@ This repository is at **Phase 0**: proving that agents can build that cross-syst
 | `src/fpso/connectors/` | Read-only connectors for the five sources (ERP maintenance, ERP materials, P6, vessel, supplier mail), each also runnable as a read-only MCP server |
 | `src/fpso/resolution/` | Candidate matching (cheap, high-recall proposals with the signals that fired), Claude adjudication of each target's candidates, and per-link-type calibration with an auto-accept threshold |
 | `src/fpso/onboarding.py` | Onboarding agent: drafts a plain-language description of a new source, its keys and the link types it can join |
+| `src/fpso/logistics.py`, `inventory.py`, `writeback.py`, `rule_cards.py`, `phase2.py` | Phase 2: deck-space planning, spare stock across stores, actions on approval, plain-language rule cards |
+| `src/fpso/weather.py`, `condition.py`, `campaign.py`, `scenario.py`, `orchestrator.py`, `events.py`, `phase3.py` | Phase 3: weather, condition monitoring, campaigns, what-ifs, and the orchestrator acting within limits |
 | `src/fpso/eval/` | Scoring harness (the only code that reads `truth/`), the adjudication run, and the two simulated reviewers |
 | `docs/model-setup.md` | Steps to get an Anthropic API key and point the code at it |
 | `docs/aws-setup.md` | Steps to set up an AWS account for Bedrock, for a later move |
@@ -33,6 +35,8 @@ fpso-round --run data/kestrel-A --round 0              # measured round on the f
 fpso-onboard erp-mm --extracts data/kestrel-A/extracts  # onboarding draft for one source
 fpso-readiness --run data/kestrel-A                     # weekly readiness reports, observe only
 fpso-procure --run data/kestrel-A --no-model             # procurement recommendations, replayed weekly
+fpso-logistics --run data/kestrel-A --no-model           # Phase 2: deck space, helicopters, spares, approvals
+fpso-orchestrate --run data/kestrel-A --no-model         # Phase 3: weather, condition, orchestrator acting within limits
 fpso-mcp erp-pm --extracts data/kestrel-A/extracts     # serve one source over MCP (stdio)
 fpso-model-check                                       # one tiny call per role (stub unless FPSO_MODEL_BACKEND=anthropic)
 pytest -q
@@ -76,9 +80,23 @@ The Supplier Liaison agent drafts buyer messages and never sends them: a chase f
 
 Each replayed day ends with a planner brief (`brief-<date>.md`): every item from the three agents in one list, parts that move the turnaround end first (most days first), then orders to place now, expedites, orders due soon and unacknowledged POs. The simulated planner accepts, edits (right part, wrong action or wrong turnaround impact) or rejects each item. Edits and rejections go to `corrections.jsonl` as eval cases, and a rejected item is not raised again on later days. `summary.json` reports the share accepted unchanged (plan target 70%).
 
+## Logistics and write-back (Phase 2)
+
+`fpso-logistics` adds the logistics data (`helicopter/`, `marine_ops/`, `warehouse/`, sailing capacity and material prices; written clean from their own seed, so the earlier extracts do not change) to a run that lacks it, then replays it weekly. Each day the Logistics agent packs every line on order that will sail in the next 6 weeks onto sailings, soonest need first and turnaround parts first, under the deck space other cargo leaves, crane days and bunkering. A part that lands after its need date is a shortfall with a cause: `supply` (even the first boat after delivery is too late), `capacity` (the boat that would make it is full) or `crane` (no lift in time). Each gets the cheaper of helicopter cargo and an extra deck slot that lands it in time. Lines the agent cannot trace to a work order still take deck space on an estimated date, so a capacity shortfall is only reported when it holds with traced parts alone. The Inventory agent looks for free stock offshore and on the sister asset (FPSO Merlin) before anything is bought or flown.
+
+What is left becomes actions: purchase requisitions, vessel slot requests, helicopter cargo and stock transfers. The simulated planner approves or rejects each one, and only approved actions are written to `reports/logistics/outbox/<system>.jsonl`, which stands in for the real systems. A part is never actioned twice, and a rejected action is not raised again.
+
+Logistics limits are rule cards: one plain sentence each in `src/fpso/rules/kestrel.txt` ("No single item over 150 kg goes by helicopter."). Each sentence compiles to a parameter and a check, and writes its own test cases just inside and outside its limit; a run refuses to start if any card fails them, and a sentence no template matches is reported as not understood rather than guessed at.
+
+## Orchestration (Phase 3)
+
+`fpso-orchestrate` adds weather and historian data (`weather/`, `historian/`) and replays the Phase 2 pipeline with five more pieces. An event bus (`events.jsonl`) carries what each source gained since the previous day and every agent finding. The Weather & Disconnect agent reads each morning's 5-day forecast and takes the sailings and flights the rule cards' wave and wind limits will stop out of the plan, so a part on a boat that will not sail shows up as a `weather` shortfall in time to fly it. The Condition agent watches vibration on rotating equipment and flags a machine whose level is high or well above its own usual level and still climbing, with the spares for its model that have no stock. The Campaign agent groups small jobs on one system within 10 days into one campaign. The Scenario agent forks the plan and answers what-ifs (a sailing cancelled, a crane down, a supplier slip, a storm) without touching the live plan.
+
+The orchestrator settles every late part by cost of delay (mock rates: a turnaround day, else a day rate by equipment criticality), largest first, so the scarce option goes where a day late costs most. A fix runs without approval only when it costs less than the rule cards' limit, saves more than it costs, and rests on complete facts: every link settled, every delay notice read, and not a capacity shortfall. Everything else goes to the planner. The summary counts incidents (actions run without approval that turn out wrong or break a card; the gate is zero) and expedite spend against today's practice of an emergency charter once the planner notices.
+
 ## Replay clock
 
-`fpso-replay` copies a run as it stood on one day, for agents that run daily. It keeps PO lines ordered by that day, supplier emails sent by then, and manifest lines for sailings that depart within 3 days or earlier. Masters, work orders, components, the schedule, sailings and stock stay whole, and `truth/links.csv` keeps only links whose records are visible.
+`fpso-replay` copies a run as it stood on one day, for agents that run daily. It keeps PO lines ordered by that day, supplier emails sent by then, and manifest lines for sailings that depart within 3 days or earlier. Weather and the historian are cut to that day too. Masters, work orders, components, the schedule, sailings, stock and the logistics data stay whole, and `truth/links.csv` keeps only links whose records are visible.
 
 ## Tests
 

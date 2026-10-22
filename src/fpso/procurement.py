@@ -109,7 +109,8 @@ class ProcurementAgent:
     def run(self, as_of: date) -> tuple[list[Recommendation], int]:
         """Recommendations, and how many components wait on an open supply link."""
         recs, open_supply = [], 0
-        for f in self.chain.facts(as_of):
+        self.facts = self.chain.facts(as_of)  # kept for the agents that build on this one
+        for f in self.facts:
             if f.po_line is None and "supply" in f.unsettled:
                 open_supply += 1
                 continue
