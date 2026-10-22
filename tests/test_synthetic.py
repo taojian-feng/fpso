@@ -112,3 +112,29 @@ def test_dev_profile_never_merges(tmp_path):
     export(build_world(seed=11, scale=0.3), tmp_path, "A")
     rows = _rows(tmp_path / "extracts/vessel/manifest_lines.csv")
     assert not any(r["description"].startswith("ASSORTED") for r in rows)
+
+
+def test_profile_c_carries_the_missing_fields(tmp_path):
+    export(build_world(seed=11, scale=SCALE), tmp_path, "C")
+    po = _rows(tmp_path / "extracts/erp_mm/po_lines.csv")
+    ml = _rows(tmp_path / "extracts/vessel/manifest_lines.csv")
+    truth = _rows(tmp_path / "truth/links.csv")
+    comp = {r["to_key"]: r["from_key"] for r in truth if r["link_type"] == "component_po_line"}
+    with_res = [r for r in po if r["RSNUM"]]
+    assert len(with_res) > 0.7 * len(po)
+    for r in with_res:
+        assert comp[f"{r['EBELN']}-{r['EBELP']}"] == f"{r['RSNUM']}-{r['RSPOS']}"
+    shipped = {
+        (r["from_key"], r["to_key"]) for r in truth if r["link_type"] == "po_line_manifest_line"
+    }
+    with_item = [r for r in ml if r["po_item_ref"]]
+    assert len(with_item) > 0.7 * len(ml)
+    for r in with_item:
+        for key in r["po_item_ref"].split():
+            assert (key, r["line_id"]) in shipped
+
+
+def test_dev_and_held_back_profiles_have_no_profile_c_columns(runs):
+    for d in runs.values():
+        assert "RSNUM" not in _rows(d / "extracts/erp_mm/po_lines.csv")[0]
+        assert "po_item_ref" not in _rows(d / "extracts/vessel/manifest_lines.csv")[0]
