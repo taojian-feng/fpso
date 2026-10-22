@@ -32,6 +32,7 @@ fpso-adjudicate --run data/kestrel-A --sample 60        # model-in-the-loop prec
 fpso-round --run data/kestrel-A --round 0              # measured round on the fixed gold set
 fpso-onboard erp-mm --extracts data/kestrel-A/extracts  # onboarding draft for one source
 fpso-readiness --run data/kestrel-A                     # weekly readiness reports, observe only
+fpso-procure --run data/kestrel-A --no-model             # procurement recommendations, replayed weekly
 fpso-mcp erp-pm --extracts data/kestrel-A/extracts     # serve one source over MCP (stdio)
 fpso-model-check                                       # one tiny call per role (stub unless FPSO_MODEL_BACKEND=anthropic)
 pytest -q
@@ -64,6 +65,12 @@ At full size, one run has about 300 equipment items, 190 materials, 1,500 work o
 `fpso-round` is the harness for the plan's rounds. The first run fixes a gold set in `reports/gold.json`: 80 targets per link type, half easy and half hard, split 25% dev and 75% held-out. Every later round reuses it. On dev targets the simulated reviewers label each candidate pair; every high-confidence pair and a random 20% of the rest get a second reviewer, and pairs where they disagree, or where one of them skipped, are left out of calibration. Held-out targets are scored against `truth/`. Each round writes `reports/rounds/round-<n>.{json,md}` with the model, prompt hash and code commit, plus reviewer agreement and accuracy, and `summary.md` compares rounds. Profile B refuses to run without `--final`.
 
 `fpso-readiness` is the Readiness agent at autonomy level 0. For each report date (by default the turnaround 6 and 5 weeks out) it takes every work order starting 4 to 26 weeks later, walks component, PO line, manifest lines and supplier emails, and gives each component at most one gap: no supply, PO late, supplier slip, or not shipped in time. Components whose gap would rest on a link it could not settle are listed as unverified instead. Links come from decisive rule matches, then the model (reusing the latest round's answers where the prompt is unchanged); the small model reads supplier emails for delays. Reports go to `reports/readiness/<date>.{json,md}` and are scored against the same facts built from the clean world: agreement is the share of work orders whose gap list matches exactly (plan target 80%).
+
+## Procurement agent
+
+`fpso-procure` is the Lead-time & Procurement agent at autonomy level 1: it recommends, and never orders or changes anything. For each day it replays (weekly by default, over the run's window), it reads the run as it stood that day and works back from each component's need date: the latest order date is the need minus 4 days to reach a sailing minus the material's lead time. A component with no PO line and no stock gets `order_now` once that date has passed and `order_soon` within 14 days of it. A PO line whose delivery date, or a later date from a supplier email, lands within 4 days of the need gets `expedite`. Links and email reading come from the Readiness agent's chain walk. Each day is scored against the same rules on the clean world, and `summary.json` gives precision and recall per action plus how much earlier than a planner's usual notice (2 weeks before need) each late part was flagged.
+
+The Schedule agent runs on the same days. For each part flagged `order_now` or `expedite`, it works out how many days late the part lands, delays the work order's P6 activity by whatever the gap between need date and start does not absorb, and pushes that delay through finish-to-start successors. It reports which activities move and whether, and by how much, the turnaround end moves. The work order to activity link comes from the same chain walk; a part whose work order has no settled activity is counted as unscheduled.
 
 ## Replay clock
 

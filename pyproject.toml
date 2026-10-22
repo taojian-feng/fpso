@@ -22,6 +22,7 @@ fpso-onboard = "fpso.onboarding:main"
 fpso-round = "fpso.eval.rounds:main"
 fpso-readiness = "fpso.readiness:main"
 fpso-replay = "fpso.synthetic.replay:main"
+fpso-procure = "fpso.procurement:main"
 
 [build-system]
 requires = ["hatchling"]
