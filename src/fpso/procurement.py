@@ -244,13 +244,24 @@ def run_procurement(
         client.backend = CachedBackend(client.backend, out_dir / "answers.jsonl")
     else:
         client = None
-    # The Schedule and Supplier Liaison agents build on this module's recommendations.
+    # The other Phase 1 agents and the brief build on this module's recommendations.
+    from fpso import brief
+    from fpso.eval.reviewers import default_reviewers
     from fpso.liaison import LiaisonAgent, score_chases, truth_unacknowledged
     from fpso.schedule import ScheduleAgent, score_impacts, truth_impacts
 
+    planner = next(
+        r
+        for r in default_reviewers(set(), log=ActionLog(out_dir / "planner.jsonl"))
+        if r.role == "planner"
+    )
+    corrections = out_dir / "corrections.jsonl"
+    corrections.unlink(missing_ok=True)
+    suppressed: set[str] = set()  # items the planner rejected stay out of later briefs
+
     world = load_world(run_dir)  # scoring only
     days: dict[date, tuple[list, list]] = {}
-    impact_scores, chase_scores = [], []
+    impact_scores, chase_scores, review_scores = [], [], []
     per_day = []
     d = start
     while d <= end:
@@ -263,8 +274,25 @@ def run_procurement(
         shutil.rmtree(view)
         truth = truth_recommendations(world, d)
         scores = score_day(recs, truth)
-        impact_scores.append(score_impacts(impacts, truth_impacts(world, truth, d)))
-        chase_scores.append(score_chases(chases, truth_unacknowledged(world, d)))
+        t_impacts = truth_impacts(world, truth, d)
+        t_no_ack = truth_unacknowledged(world, d)
+        impact_scores.append(score_impacts(impacts, t_impacts))
+        chase_scores.append(score_chases(chases, t_no_ack))
+        items = brief.build_brief(recs, impacts, chases, suppressed)
+        reviews = brief.review_brief(
+            items,
+            truth,
+            {i.component: i.turnaround_delay for i in t_impacts},
+            set(t_no_ack),
+            planner,
+            d,
+        )
+        brief.save_corrections(corrections, d, items, reviews)
+        suppressed |= {r.item for r in reviews if r.verdict == "rejected"}
+        review_scores.append(brief.score_reviews(reviews))
+        (out_dir / f"brief-{d.isoformat()}.md").write_text(
+            brief.to_markdown(run, d, items, reviews)
+        )
         days[d] = (recs, truth)
         (out_dir / f"{d.isoformat()}.md").write_text(to_markdown(run, d, recs, scores, open_n))
         (out_dir / f"{d.isoformat()}.json").write_text(
@@ -276,6 +304,7 @@ def run_procurement(
                     "recommendations": [asdict(r) for r in recs],
                     "schedule": {"scores": impact_scores[-1], "impacts": map(asdict, impacts)},
                     "liaison": {"scores": chase_scores[-1], "drafts": map(asdict, chases)},
+                    "brief": {"scores": review_scores[-1], "items": map(asdict, items)},
                 },
                 default=lambda o: list(o) if isinstance(o, map) else str(o),
                 indent=2,
@@ -288,6 +317,7 @@ def run_procurement(
                 **scores,
                 "schedule": impact_scores[-1],
                 "liaison": chase_scores[-1],
+                "brief": review_scores[-1],
             }
         )
         d += timedelta(days=step_days)
@@ -318,6 +348,7 @@ def run_procurement(
         "earlier_detection": earlier_detection(days),
         "schedule": _schedule_totals(impact_scores),
         "liaison": _liaison_totals(chase_scores),
+        "brief": _brief_totals(review_scores, len(suppressed)),
         "per_day": per_day,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -356,6 +387,14 @@ def _liaison_totals(scores: list[dict]) -> dict:
     }
 
 
+def _brief_totals(scores: list[dict], suppressed: int) -> dict:
+    out = {k: sum(s[k] for s in scores) for k in ("items", "accepted", "edited", "rejected")}
+    answered = out["accepted"] + out["edited"] + out["rejected"]
+    out["accepted_unchanged"] = round(out["accepted"] / answered, 4) if answered else None
+    out["suppressed_after_rejection"] = suppressed
+    return out
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Procurement recommendations, replayed day by day.")
     ap.add_argument("--run", required=True, help="a run directory written by fpso-synth")
@@ -372,7 +411,15 @@ def main(argv: list[str] | None = None) -> None:
         json.dumps(
             {
                 k: s[k]
-                for k in ("days", "cost_usd", "totals", "earlier_detection", "schedule", "liaison")
+                for k in (
+                    "days",
+                    "cost_usd",
+                    "totals",
+                    "earlier_detection",
+                    "schedule",
+                    "liaison",
+                    "brief",
+                )
             },
             indent=2,
         )

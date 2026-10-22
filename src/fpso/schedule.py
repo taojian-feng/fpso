@@ -57,16 +57,16 @@ def forward_pass(acts: dict[str, Activity], first: str, delay_days: int) -> dict
     """Days each activity moves when ``first`` cannot start until ``delay_days`` later.
 
     Finish-to-start: a successor starts no earlier than the day after its predecessor
-    finishes, so the gap between them absorbs part of the delay."""
+    finishes, so the gap between them absorbs part of the delay. Where the plan already
+    overlaps the two, the plan stands as it is and the gap counts as none."""
     moved = {first: delay_days}
     order = [first]
     while order:
         key = order.pop(0)
         a = acts[key]
-        new_finish = a.finish + timedelta(days=moved[key])
         for s in a.successors:
-            succ = acts[s]
-            push = (new_finish + timedelta(days=1) - succ.start).days
+            gap = max(0, (acts[s].start - a.finish).days - 1)
+            push = moved[key] - gap
             if push > moved.get(s, 0):
                 moved[s] = push
                 order.append(s)
