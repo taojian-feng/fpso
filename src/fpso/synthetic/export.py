@@ -8,6 +8,9 @@ Layout under the output directory:
       p6/                kestrel.xer
       vessel/            sailings.csv, manifest_lines.csv
       supplier_mail/     <message-id>.eml
+      helicopter/, marine_ops/, warehouse/ and a few vessel and erp_mm files: Phase 2
+      logistics (see ``fpso.synthetic.logistics``), written clean and from their own seed
+      weather/, historian/: Phase 3 operations data (``fpso.synthetic.operations``)
     truth/               never given to agents: links.csv and run.json
 """
 
@@ -23,6 +26,8 @@ from email.utils import format_datetime
 from pathlib import Path
 
 from fpso.synthetic.corrupt import PROFILES, Corruptor
+from fpso.synthetic.logistics import export_logistics
+from fpso.synthetic.operations import export_operations
 from fpso.synthetic.truth import ASSET, ASSET_CODE, OPERATOR, ManifestLine, World
 
 BUYERS = ["d.reyes", "l.park", "procurement.kestrel"]
@@ -177,6 +182,8 @@ def export(world: World, out_dir: str | Path, profile: str = "A") -> dict:
         "window": [world.window_start.isoformat(), world.window_end.isoformat()],
         "turnaround": [world.turnaround_start.isoformat(), world.turnaround_end.isoformat()],
         "counts": counts,
+        "logistics": export_logistics(world, ex),
+        "operations": export_operations(world, ex),
     }
     (out / "truth" / "run.json").write_text(json.dumps(run, indent=2))
     return run

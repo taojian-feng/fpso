@@ -6,7 +6,8 @@ once. This copies a run directory, keeping only the records that existed by ``as
 - PO lines whose order date (BEDAT) is on or before ``as_of``;
 - supplier emails sent on or before ``as_of``;
 - manifest lines whose sailing departs within ``MANIFEST_LEAD_DAYS`` after ``as_of``, or earlier
-  (the vessel team issues a manifest a few days before the boat sails).
+  (the vessel team issues a manifest a few days before the boat sails);
+- weather observed and forecasts issued by ``as_of``, and the historian up to ``as_of``.
 
 Masters, work orders, components, the schedule, sailings and stock are kept whole. Truth links
 are cut to the records left, so scoring a replayed day only counts what could be seen.
@@ -78,6 +79,17 @@ def as_of_view(run_dir: str | Path, as_of: date, out_dir: str | Path) -> dict:
     rows = [r for r in rows if r["sailing_id"] in issued]
     _write(ex / "vessel" / "manifest_lines.csv", header, rows)
     manifest = {r["line_id"] for r in rows}
+
+    # Phase 3 operations data: only what was observed or forecast by that morning.
+    for name, col in (("observed.csv", "date"), ("forecasts.csv", "issued")):
+        path = ex / "weather" / name
+        if path.exists():
+            header, rows = _read(path)
+            _write(path, header, [r for r in rows if date.fromisoformat(r[col]) <= as_of])
+    path = ex / "historian" / "vibration.csv"
+    if path.exists():
+        header, rows = _read(path)
+        _write(path, header, [r for r in rows if date.fromisoformat(r["date"]) <= as_of])
 
     visible = {
         "erp-mm": lambda k: k in po_lines or k in pos,

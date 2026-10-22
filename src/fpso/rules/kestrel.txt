@@ -1,0 +1,13 @@
+# Logistics rule cards for FPSO Kestrel (mock), one rule per line, as the planners wrote them.
+No single item over 150 kg goes by helicopter.
+Each passenger counts as 110 kg of helicopter payload.
+No cargo is lifted on a bunkering day.
+Cargo is lifted only when a crane is available.
+Cargo needs 1 day at the shore base before it sails.
+A sailing takes 1 day to reach the asset.
+A transfer from the sister asset takes 7 days.
+Keep 2% of the deck space free for emergency cargo.
+# Phase 3: weather limits and what agents may do without asking.
+No sailing when the wave height is over 4.5 m.
+Helicopters do not fly when the wind is over 50 knots.
+Actions under 5000 USD may run without approval.
