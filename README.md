@@ -72,6 +72,8 @@ At full size, one run has about 300 equipment items, 190 materials, 1,500 work o
 
 The Schedule agent runs on the same days. For each part flagged `order_now` or `expedite`, it works out how many days late the part lands, delays the work order's P6 activity by whatever the gap between need date and start does not absorb, and pushes that delay through finish-to-start successors. It reports which activities move and whether, and by how much, the turnaround end moves. The work order to activity link comes from the same chain walk; a part whose work order has no settled activity is counted as unscheduled.
 
+The Supplier Liaison agent drafts buyer messages and never sends them: a chase for every open PO the supplier has not acknowledged 7 days after it was placed, and one expedite request per PO with lines flagged `expedite`, naming each line, its need date and what its delay does to the turnaround. It reads what kind each email is (acknowledgement, delay notice, dispatch notice) from fixed phrases, with no model, and does not chase a PO that an email nobody could link might belong to.
+
 ## Replay clock
 
 `fpso-replay` copies a run as it stood on one day, for agents that run daily. It keeps PO lines ordered by that day, supplier emails sent by then, and manifest lines for sailings that depart within 3 days or earlier. Masters, work orders, components, the schedule, sailings and stock stay whole, and `truth/links.csv` keeps only links whose records are visible.

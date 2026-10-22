@@ -244,12 +244,13 @@ def run_procurement(
         client.backend = CachedBackend(client.backend, out_dir / "answers.jsonl")
     else:
         client = None
-    # The Schedule agent builds on this module's recommendations.
+    # The Schedule and Supplier Liaison agents build on this module's recommendations.
+    from fpso.liaison import LiaisonAgent, score_chases, truth_unacknowledged
     from fpso.schedule import ScheduleAgent, score_impacts, truth_impacts
 
     world = load_world(run_dir)  # scoring only
     days: dict[date, tuple[list, list]] = {}
-    impact_scores = []
+    impact_scores, chase_scores = [], []
     per_day = []
     d = start
     while d <= end:
@@ -258,10 +259,12 @@ def run_procurement(
         agent = ProcurementAgent(view / "extracts", client, max_cost_usd)
         recs, open_n = agent.run(d)
         impacts = ScheduleAgent(agent.chain).run(recs, d, agent.lead)
+        chases = LiaisonAgent(agent.chain).run(d, recs, impacts)
         shutil.rmtree(view)
         truth = truth_recommendations(world, d)
         scores = score_day(recs, truth)
         impact_scores.append(score_impacts(impacts, truth_impacts(world, truth, d)))
+        chase_scores.append(score_chases(chases, truth_unacknowledged(world, d)))
         days[d] = (recs, truth)
         (out_dir / f"{d.isoformat()}.md").write_text(to_markdown(run, d, recs, scores, open_n))
         (out_dir / f"{d.isoformat()}.json").write_text(
@@ -272,13 +275,20 @@ def run_procurement(
                     "scores": scores,
                     "recommendations": [asdict(r) for r in recs],
                     "schedule": {"scores": impact_scores[-1], "impacts": map(asdict, impacts)},
+                    "liaison": {"scores": chase_scores[-1], "drafts": map(asdict, chases)},
                 },
                 default=lambda o: list(o) if isinstance(o, map) else str(o),
                 indent=2,
             )
         )
         per_day.append(
-            {"as_of": d.isoformat(), "open_supply": open_n, **scores, "schedule": impact_scores[-1]}
+            {
+                "as_of": d.isoformat(),
+                "open_supply": open_n,
+                **scores,
+                "schedule": impact_scores[-1],
+                "liaison": chase_scores[-1],
+            }
         )
         d += timedelta(days=step_days)
 
@@ -307,6 +317,7 @@ def run_procurement(
         "totals": totals,
         "earlier_detection": earlier_detection(days),
         "schedule": _schedule_totals(impact_scores),
+        "liaison": _liaison_totals(chase_scores),
         "per_day": per_day,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -332,6 +343,19 @@ def _schedule_totals(scores: list[dict]) -> dict:
     }
 
 
+def _liaison_totals(scores: list[dict]) -> dict:
+    rep = sum(s["no_ack_reported"] for s in scores)
+    tru = sum(s["no_ack_true"] for s in scores)
+    hit_p = sum(round((s["no_ack_precision"] or 0) * s["no_ack_reported"]) for s in scores)
+    return {
+        "no_ack_reported": rep,
+        "no_ack_true": tru,
+        "no_ack_precision": round(hit_p / rep, 4) if rep else None,
+        "no_ack_recall": round(hit_p / tru, 4) if tru else None,
+        "expedite_drafts": sum(s["expedite_drafts"] for s in scores),
+    }
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Procurement recommendations, replayed day by day.")
     ap.add_argument("--run", required=True, help="a run directory written by fpso-synth")
@@ -346,7 +370,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     print(
         json.dumps(
-            {k: s[k] for k in ("days", "cost_usd", "totals", "earlier_detection", "schedule")},
+            {
+                k: s[k]
+                for k in ("days", "cost_usd", "totals", "earlier_detection", "schedule", "liaison")
+            },
             indent=2,
         )
     )
