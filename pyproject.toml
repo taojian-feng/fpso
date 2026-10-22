@@ -25,6 +25,7 @@ fpso-replay = "fpso.synthetic.replay:main"
 fpso-procure = "fpso.procurement:main"
 fpso-logistics = "fpso.phase2:main"
 fpso-orchestrate = "fpso.phase3:main"
+fpso-fleet = "fpso.fleet.cli:main"
 
 [build-system]
 requires = ["hatchling"]

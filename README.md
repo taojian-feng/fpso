@@ -2,7 +2,7 @@
 
 An agentic supply chain for offshore FPSO operations. AI agents link the dependency chain that no single system holds today: a failing pump, its work order, the parts it needs, the purchase orders and suppliers behind them, and the boat that carries them offshore.
 
-This repository is at **Phase 0**: proving that agents can build that cross-system picture from messy data. They do it by discovering links between records instead of relying on a hand-designed model. Everything in Phase 0 is mock: the operator **Northwind Offshore** and the asset **FPSO Kestrel** are fictional, and so is all the data.
+Phase 0 proved that agents can build that cross-system picture from messy data, by discovering links between records instead of relying on a hand-designed model. Phases 1 to 4 build on it: agents that recommend, then act with approval, then act within limits, then onboard more assets. Everything is mock: the operator **Northwind Offshore** and the asset **FPSO Kestrel** are fictional, and so is all the data.
 
 ## What is here
 
@@ -17,6 +17,8 @@ This repository is at **Phase 0**: proving that agents can build that cross-syst
 | `src/fpso/onboarding.py` | Onboarding agent: drafts a plain-language description of a new source, its keys and the link types it can join |
 | `src/fpso/logistics.py`, `inventory.py`, `writeback.py`, `rule_cards.py`, `phase2.py` | Phase 2: deck-space planning, spare stock across stores, actions on approval, plain-language rule cards |
 | `src/fpso/weather.py`, `condition.py`, `campaign.py`, `scenario.py`, `orchestrator.py`, `events.py`, `phase3.py` | Phase 3: weather, condition monitoring, campaigns, what-ifs, and the orchestrator acting within limits |
+| `src/fpso/fleet/` | Phase 4: the sister assets FPSO Merlin and FPSO Osprey, a Maximo-style export, the rule mapper and adapter that onboard them, and supplier agents over A2A |
+| `src/fpso/library.py` | Shared library of connectors, dialect mappings, rule cards and confirmed patterns, per asset |
 | `src/fpso/eval/` | Scoring harness (the only code that reads `truth/`), the adjudication run, and the two simulated reviewers |
 | `docs/model-setup.md` | Steps to get an Anthropic API key and point the code at it |
 | `docs/aws-setup.md` | Steps to set up an AWS account for Bedrock, for a later move |
@@ -37,6 +39,7 @@ fpso-readiness --run data/kestrel-A                     # weekly readiness repor
 fpso-procure --run data/kestrel-A --no-model             # procurement recommendations, replayed weekly
 fpso-logistics --run data/kestrel-A --no-model           # Phase 2: deck space, helicopters, spares, approvals
 fpso-orchestrate --run data/kestrel-A --no-model         # Phase 3: weather, condition, orchestrator acting within limits
+fpso-fleet --out data/fleet --scale 0.25                # Phase 4: onboard Merlin and Osprey, A2A suppliers
 fpso-mcp erp-pm --extracts data/kestrel-A/extracts     # serve one source over MCP (stdio)
 fpso-model-check                                       # one tiny call per role (stub unless FPSO_MODEL_BACKEND=anthropic)
 pytest -q
@@ -93,6 +96,18 @@ Logistics limits are rule cards: one plain sentence each in `src/fpso/rules/kest
 `fpso-orchestrate` adds weather and historian data (`weather/`, `historian/`) and replays the Phase 2 pipeline with five more pieces. An event bus (`events.jsonl`) carries what each source gained since the previous day and every agent finding. The Weather & Disconnect agent reads each morning's 5-day forecast and takes the sailings and flights the rule cards' wave and wind limits will stop out of the plan, so a part on a boat that will not sail shows up as a `weather` shortfall in time to fly it. The Condition agent watches vibration on rotating equipment and flags a machine whose level is high or well above its own usual level and still climbing, with the spares for its model that have no stock. The Campaign agent groups small jobs on one system within 10 days into one campaign. The Scenario agent forks the plan and answers what-ifs (a sailing cancelled, a crane down, a supplier slip, a storm) without touching the live plan.
 
 The orchestrator settles every late part by cost of delay (mock rates: a turnaround day, else a day rate by equipment criticality), largest first, so the scarce option goes where a day late costs most. A fix runs without approval only when it costs less than the rule cards' limit, saves more than it costs, and rests on complete facts: every link settled, every delay notice read, and not a capacity shortfall. Everything else goes to the planner. The summary counts incidents (actions run without approval that turn out wrong or break a card; the gate is zero) and expedite spend against today's practice of an emergency charter once the planner notices.
+
+## Fleet and suppliers (Phase 4)
+
+`fpso-fleet` checks the Phase 4 gate: the second asset should take clearly fewer days to onboard than the first. Northwind's sister FPSOs **Merlin** and **Osprey** (also fictional) come from the same world builder with their own seeds, but their extracts arrive from a Maximo-style CMMS: ASSETNUM, WONUM, ITEMNUM, PONUM and POLINENUM instead of the SAP-style names, dates written `09-APR-2027`, quantities as `2.00`, a logistics provider with its own voyage and cargo files, and a P6 project whose work-order UDF has another label. Kestrel's exports are untouched.
+
+The Onboarding agent maps these without a model. It profiles each raw column (dates and their format, ids, quantities, tags, emails, free text), splits each name into words through a small generic glossary, and scores every canonical field the agents read against every column; a reference must also share values with the key it points at. Sure matches are accepted and the rest flagged for review. The draft is scored against the generator's truth, a simulated reviewer fixes what is wrong, and the adapter writes the asset in the canonical layout so the Readiness, Procurement, Schedule and Liaison agents run on it unchanged, scored against that asset's truth. Effort is estimated from stated assumptions: Kestrel's five connectors were written by hand (6 hours each) and every field worked out by hand (20 minutes each); a later asset needs an hour per source to set up, 20 minutes per field fixed, 3 per flagged field and 1 per accepted field.
+
+The confirmed mapping goes into the shared library (`src/fpso/library.py`) as the `maximo` dialect, next to the connectors, the agents' rule cards and any confirmed link patterns. Osprey runs the same set-up with two local renames, so it reuses the dialect and only the renamed fields go to the mapper.
+
+Vendors that run a supplier agent publish an agent card with two skills, order status and expedite, and answer JSON task messages (task id, state, artifact) from their own order book as it stood that day: whether they have the order, each line's promised date and whether it has gone. A supplier knows of a delay 10 days before its delay email. Some agents miss tasks, answer after the buyer's 24-hour deadline, or repeat a stale date. The Supplier Liaison agent asks the agent first and keeps its email draft only when there is no agent or no answer in time. The report gives the share of no-ack and expedite chases settled over A2A, and how often the promised dates were right.
+
+Reports go to `reports/fleet/summary.{json,md}` under `--out`, with each asset's mapping draft and the library. `--model` also asks the model for the Onboarding agent's plain-language draft of each raw source; it is off by default.
 
 ## Replay clock
 
