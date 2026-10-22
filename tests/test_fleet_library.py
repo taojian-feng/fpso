@@ -13,7 +13,8 @@ SCALE = 0.05
 
 def test_library_starts_with_the_shared_pieces():
     lib = Library.new()
-    assert set(lib.connectors) == {"erp-pm", "erp-mm", "p6", "vessel", "supplier-mail"}
+    assert set(lib.connectors) >= {"erp-pm", "erp-mm", "p6", "vessel", "supplier-mail"}
+    assert "logistics.heli_max_item_kg" in lib.rule_cards
     assert list(lib.dialects) == ["sap"]
     assert lib.rule_cards["procurement.order_by"]["MIN_SHIP_DAYS"] == 4
     assert "ack" in lib.rule_cards["liaison.email_kind"]

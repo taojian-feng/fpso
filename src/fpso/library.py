@@ -36,6 +36,7 @@ class AssetEntry:
 def rule_cards() -> dict[str, dict]:
     """The agents' rules as cards: a statement and the parameters the code runs with."""
     from fpso import liaison, procurement, readiness, schedule
+    from fpso.rule_cards import load_cards
 
     return {
         "procurement.order_by": {
@@ -69,6 +70,8 @@ def rule_cards() -> dict[str, dict]:
             "statement": "Turnaround activities sit under this WBS node.",
             "TURNAROUND_WBS": schedule.TURNAROUND_WBS,
         },
+        # The logistics and autonomy limits planners write as sentences (Phases 2 and 3).
+        **{f"logistics.{c.name}": {"statement": c.text, **c.params} for c in load_cards().cards},
     }
 
 
