@@ -61,3 +61,9 @@ def test_truth_schedule_has_turnaround_chains():
     assert ta and any(a.successors for a in ta)
     assert max(a.finish for a in ta) <= world.turnaround_end
     assert set(act_of) <= {w.wo_no for w in world.work_orders}
+
+
+def test_an_overlap_already_in_the_plan_does_not_push_by_itself():
+    acts = _chain()
+    acts["b"].start = D  # the plan already starts b before a finishes
+    assert forward_pass(acts, "a", 1) == {"a": 1, "b": 1, "c": 1}

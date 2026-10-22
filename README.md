@@ -74,6 +74,8 @@ The Schedule agent runs on the same days. For each part flagged `order_now` or `
 
 The Supplier Liaison agent drafts buyer messages and never sends them: a chase for every open PO the supplier has not acknowledged 7 days after it was placed, and one expedite request per PO with lines flagged `expedite`, naming each line, its need date and what its delay does to the turnaround. It reads what kind each email is (acknowledgement, delay notice, dispatch notice) from fixed phrases, with no model, and does not chase a PO that an email nobody could link might belong to.
 
+Each replayed day ends with a planner brief (`brief-<date>.md`): every item from the three agents in one list, parts that move the turnaround end first (most days first), then orders to place now, expedites, orders due soon and unacknowledged POs. The simulated planner accepts, edits (right part, wrong action or wrong turnaround impact) or rejects each item. Edits and rejections go to `corrections.jsonl` as eval cases, and a rejected item is not raised again on later days. `summary.json` reports the share accepted unchanged (plan target 70%).
+
 ## Replay clock
 
 `fpso-replay` copies a run as it stood on one day, for agents that run daily. It keeps PO lines ordered by that day, supplier emails sent by then, and manifest lines for sailings that depart within 3 days or earlier. Masters, work orders, components, the schedule, sailings and stock stay whole, and `truth/links.csv` keeps only links whose records are visible.

@@ -120,7 +120,8 @@ class LiaisonAgent:
             for r in sorted(rs, key=lambda r: (r.need, r.po_line)):
                 i = impact.get(r.component)
                 effect = (
-                    f"; at that date the turnaround end moves {i.turnaround_delay} days"
+                    f"; at that date the turnaround end moves {i.turnaround_delay} "
+                    f"day{'s' * (i.turnaround_delay != 1)}"
                     if i and i.turnaround_delay
                     else ""
                 )
