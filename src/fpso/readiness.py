@@ -129,8 +129,8 @@ def report_dates(turnaround_start: date) -> list[date]:
     return [turnaround_start - timedelta(weeks=6), turnaround_start - timedelta(weeks=5)]
 
 
-def in_horizon(start: date, as_of: date) -> bool:
-    lo, hi = HORIZON_WEEKS
+def in_horizon(start: date, as_of: date, horizon: tuple[int, int] = HORIZON_WEEKS) -> bool:
+    lo, hi = horizon
     return as_of + timedelta(weeks=lo) <= start <= as_of + timedelta(weeks=hi)
 
 
@@ -194,6 +194,7 @@ class ReadinessAgent:
     ):
         self.c = connectors
         self.client = client
+        self.horizon = HORIZON_WEEKS  # weeks out that work orders are in scope
         self.max_cost_usd = max_cost_usd
         self.patterns = [p for p in patterns or [] if p.status == "confirmed"]
         self.gen = CandidateGenerator(connectors)
@@ -424,7 +425,7 @@ class ReadinessAgent:
         scope = {
             k: w
             for k, w in self.work_orders.items()
-            if (d := parse_date(w.fields["GSTRP"])) and in_horizon(d, as_of)
+            if (d := parse_date(w.fields["GSTRP"])) and in_horizon(d, as_of, self.horizon)
         }
         comps = sorted(
             (c for c in self.components if c.fields["AUFNR"] in scope),
