@@ -135,7 +135,9 @@ def test_replayed_orchestration_has_no_incidents(small_run):
     assert (out / "events.jsonl").exists()
 
 
-def test_profile_b_is_refused(tmp_path):
+def test_profile_b_runs_only_when_final(tmp_path):
     export(build_world(seed=11, scale=0.05), tmp_path, "B")
     with pytest.raises(SystemExit):
         run_orchestration(tmp_path, use_model=False)
+    s = run_orchestration(tmp_path, step_days=28, use_model=False, final=True)
+    assert s["run"]["profile"] == "B"

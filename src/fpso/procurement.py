@@ -229,11 +229,12 @@ def run_procurement(
     max_cost_usd: float | None = 5.0,
     use_model: bool = True,
     client: ModelClient | None = None,
+    final: bool = False,
 ) -> dict:
     run_dir = Path(run_dir)
     run = json.loads((run_dir / "truth" / "run.json").read_text())
-    if run["profile"] == "B":
-        raise SystemExit("Profile B is held back for the final run.")
+    if run["profile"] == "B" and not final:
+        raise SystemExit("Profile B is held back for the final run; pass --final to use it.")
     window = [date.fromisoformat(d) for d in run["window"]]
     start, end = start or window[0], end or window[1]
     out_dir = run_dir / "reports" / "procurement"
@@ -404,9 +405,16 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--step", type=int, default=7, help="days between replayed days")
     ap.add_argument("--max-cost", type=float, default=5.0, help="stop new calls above this USD")
     ap.add_argument("--no-model", action="store_true", help="rule links only, no email reading")
+    ap.add_argument("--final", action="store_true", help="allow the held-back profile B")
     args = ap.parse_args(argv)
     s = run_procurement(
-        args.run, args.start, args.end, args.step, args.max_cost, use_model=not args.no_model
+        args.run,
+        args.start,
+        args.end,
+        args.step,
+        args.max_cost,
+        use_model=not args.no_model,
+        final=args.final,
     )
     print(
         json.dumps(

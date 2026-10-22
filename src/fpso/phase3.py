@@ -55,11 +55,11 @@ from fpso.weather import (
 from fpso.writeback import ApprovalQueue, score_decisions
 
 
-def ensure_operations(run_dir: Path, run: dict) -> None:
+def ensure_operations(run_dir: Path, run: dict, final: bool = False) -> None:
     if (run_dir / "extracts" / "weather").exists():
         return
-    if run["profile"] == "B":
-        raise SystemExit("Profile B is held back for the final run.")
+    if run["profile"] == "B" and not final:
+        raise SystemExit("Profile B is held back for the final run; pass --final to use it.")
     export_operations(load_world(run_dir), run_dir / "extracts")
 
 
@@ -95,13 +95,14 @@ def run_orchestration(
     max_cost_usd: float | None = 5.0,
     use_model: bool = True,
     rules: RuleSet | None = None,
+    final: bool = False,
 ) -> dict:
     run_dir = Path(run_dir)
     run = json.loads((run_dir / "truth" / "run.json").read_text())
-    if run["profile"] == "B":
-        raise SystemExit("Profile B is held back for the final run.")
-    ensure_logistics(run_dir, run)
-    ensure_operations(run_dir, run)
+    if run["profile"] == "B" and not final:
+        raise SystemExit("Profile B is held back for the final run; pass --final to use it.")
+    ensure_logistics(run_dir, run, final)
+    ensure_operations(run_dir, run, final)
     rules = rules or load_cards()
     if bad := rules.self_test():
         raise SystemExit("rule cards fail their own tests: " + "; ".join(bad))
@@ -332,9 +333,16 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--step", type=int, default=7, help="days between replayed days")
     ap.add_argument("--max-cost", type=float, default=5.0, help="stop new calls above this USD")
     ap.add_argument("--no-model", action="store_true", help="rule links only, no email reading")
+    ap.add_argument("--final", action="store_true", help="allow the held-back profile B")
     args = ap.parse_args(argv)
     s = run_orchestration(
-        args.run, args.start, args.end, args.step, args.max_cost, use_model=not args.no_model
+        args.run,
+        args.start,
+        args.end,
+        args.step,
+        args.max_cost,
+        use_model=not args.no_model,
+        final=args.final,
     )
     print(json.dumps({k: v for k, v in s.items() if k != "per_day"}, indent=2, default=str))
 
