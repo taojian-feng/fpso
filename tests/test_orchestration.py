@@ -69,14 +69,18 @@ def test_the_costlier_part_gets_the_last_helicopter_payload():
 
 
 def test_only_cheap_certain_fixes_run_without_approval():
-    net = _net(flights=3)
-    net = Network(net.sailings, net.flights, net.cranes, {"S1", "S2", "S3"})
-    items = [_item("a", 5, weight=20), _item("b", 5, weight=20)]
+    # Delivered too late for any boat (supply), so each flies; c's boat is forecast away.
+    net = _net(flights=8)
+    items = [_item("a", 5, weight=20, ready_days=4), _item("b", 5, weight=20, ready_days=4)]
     _, short = Planner(net, RULES).plan(items)
-    rate = {"a": 50_000.0, "b": 50_000.0}
-    s = settle(D, items, short, [], [], net, RULES, rate, {}, {}, doubtful={"b"})
+    stormy = Network(net.sailings, net.flights, net.cranes, {"S1"})
+    c = _item("c", 4, weight=20)
+    _, c_short = Planner(stormy, RULES).plan([c])
+    assert [x.cause for x in short + c_short] == ["supply", "supply", "weather"]
+    rate = {k: 50_000.0 for k in "abc"}
+    s = settle(D, items + [c], short + c_short, [], [], stormy, RULES, rate, {}, {}, {"b"})
     auto = {c.component: c.auto for c in s.choices}
-    assert auto == {"a": True, "b": False}
+    assert auto == {"a": True, "b": False, "c": False}
     for c in s.choices:
         assert c.action.cost_usd < RULES.param("auto_limit_usd", 0) or not c.auto
 

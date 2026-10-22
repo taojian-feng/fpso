@@ -43,6 +43,7 @@ class StockProposal:
     store: str  # plant-location drawn on
     replaces: str  # order_now, expedite, or the shortfall cause
     value_usd: float = 0.0  # price of the parts not bought
+    left: int = 0  # free units of the material still in that store after this claim
 
 
 def balances_from_connectors(c: dict[str, Connector]) -> list[Balance]:
@@ -92,7 +93,18 @@ def find_stock(
                 free[(mat, plant)] -= n
                 value = round(prices.get(mat, 0.0) * n, 2)
                 out.append(
-                    StockProposal(comp, wo, mat, n, need, action, f"{plant}-OFF1", why, value)
+                    StockProposal(
+                        comp,
+                        wo,
+                        mat,
+                        n,
+                        need,
+                        action,
+                        f"{plant}-OFF1",
+                        why,
+                        value,
+                        free[(mat, plant)],
+                    )
                 )
                 break
     return out

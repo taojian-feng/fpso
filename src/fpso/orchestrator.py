@@ -12,9 +12,12 @@ a spare part) when two parts want the same one:
    holds the last helicopter seat a costly one needed;
 3. an option whose cost is under the rule cards' approval limit, whose saving is larger than
    its cost, and whose facts are complete (every link settled, every delay notice read) runs
-   at once; anything else goes to the planner. So do every purchase requisition and every
-   fix for a ``capacity`` shortfall: whether a boat is full depends on cargo the agents could
-   not trace to a work order, packed on an estimated date.
+   at once (a spare only when the store keeps one more free, since another part the agents
+   could not trace may need it); anything else goes to the planner. So do every purchase
+   requisition, every fix for a ``capacity`` shortfall (whether a boat is full depends on
+   cargo the agents could not trace, packed on an estimated date) and every fix for a
+   ``weather`` shortfall (a forecast days out is wrong often enough that a person should
+   weigh it).
 
 Each run is checked against every rule card. An action that ran without approval and turns
 out wrong, or breaks a card, is counted as an incident; the Phase 3 gate is no incidents.
@@ -146,7 +149,8 @@ def settle(
             and cost < limit
             and cod > cost
             and s.component not in doubtful
-            and s.cause != "capacity"
+            and s.cause not in ("capacity", "weather")
+            and (kind != "transfer_stock" or stock[s.component].left > 0)
         )
         action = Action(
             kind,
@@ -173,7 +177,13 @@ def settle(
             "inventory",
         )
         out.choices.append(
-            Choice(p.component, 0.0, a, a.cost_usd < limit, p.value_usd - a.cost_usd)
+            Choice(
+                p.component,
+                0.0,
+                a,
+                a.cost_usd < limit and p.left > 0 and p.component not in doubtful,
+                p.value_usd - a.cost_usd,
+            )
         )
     for r in recs:
         if r.action == "order_now" and r.component not in stock:
