@@ -244,8 +244,12 @@ def run_procurement(
         client.backend = CachedBackend(client.backend, out_dir / "answers.jsonl")
     else:
         client = None
+    # The Schedule agent builds on this module's recommendations.
+    from fpso.schedule import ScheduleAgent, score_impacts, truth_impacts
+
     world = load_world(run_dir)  # scoring only
     days: dict[date, tuple[list, list]] = {}
+    impact_scores = []
     per_day = []
     d = start
     while d <= end:
@@ -253,9 +257,11 @@ def run_procurement(
         as_of_view(run_dir, d, view)
         agent = ProcurementAgent(view / "extracts", client, max_cost_usd)
         recs, open_n = agent.run(d)
+        impacts = ScheduleAgent(agent.chain).run(recs, d, agent.lead)
         shutil.rmtree(view)
         truth = truth_recommendations(world, d)
         scores = score_day(recs, truth)
+        impact_scores.append(score_impacts(impacts, truth_impacts(world, truth, d)))
         days[d] = (recs, truth)
         (out_dir / f"{d.isoformat()}.md").write_text(to_markdown(run, d, recs, scores, open_n))
         (out_dir / f"{d.isoformat()}.json").write_text(
@@ -265,12 +271,15 @@ def run_procurement(
                     "open_supply": open_n,
                     "scores": scores,
                     "recommendations": [asdict(r) for r in recs],
+                    "schedule": {"scores": impact_scores[-1], "impacts": map(asdict, impacts)},
                 },
-                default=str,
+                default=lambda o: list(o) if isinstance(o, map) else str(o),
                 indent=2,
             )
         )
-        per_day.append({"as_of": d.isoformat(), "open_supply": open_n, **scores})
+        per_day.append(
+            {"as_of": d.isoformat(), "open_supply": open_n, **scores, "schedule": impact_scores[-1]}
+        )
         d += timedelta(days=step_days)
 
     totals = {}
@@ -297,10 +306,30 @@ def run_procurement(
         "cost_usd": round(client.log.total_cost_usd, 4) if client else 0.0,
         "totals": totals,
         "earlier_detection": earlier_detection(days),
+        "schedule": _schedule_totals(impact_scores),
         "per_day": per_day,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary
+
+
+def _schedule_totals(scores: list[dict]) -> dict:
+    both = sum(s["late_parts"] for s in scores)
+    right = sum(round((s["turnaround_right"] or 0) * s["late_parts"]) for s in scores)
+    return {
+        "late_parts": both,
+        "turnaround_right": round(right / both, 4) if both else None,
+        **{
+            k: sum(s[k] for s in scores)
+            for k in (
+                "unscheduled",
+                "truly_unscheduled",
+                "turnaround_moves_true",
+                "turnaround_moves_found",
+                "turnaround_moves_false",
+            )
+        },
+    }
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -316,7 +345,10 @@ def main(argv: list[str] | None = None) -> None:
         args.run, args.start, args.end, args.step, args.max_cost, use_model=not args.no_model
     )
     print(
-        json.dumps({k: s[k] for k in ("days", "cost_usd", "totals", "earlier_detection")}, indent=2)
+        json.dumps(
+            {k: s[k] for k in ("days", "cost_usd", "totals", "earlier_detection", "schedule")},
+            indent=2,
+        )
     )
 
 

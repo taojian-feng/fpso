@@ -102,6 +102,7 @@ def test_replayed_run_scores_without_a_model(tmp_path, profile):
     for action in ("order_now", "order_soon"):
         t = s["totals"][action]
         assert t["precision"] is None or t["precision"] >= 0.8
+    assert s["schedule"]["turnaround_moves_false"] == 0
     assert (tmp_path / "reports" / "procurement" / "summary.json").exists()
     assert not (tmp_path / "reports" / "procurement" / "replay").exists()
 
