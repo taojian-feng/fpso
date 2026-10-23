@@ -12,11 +12,12 @@ a spare part) when two parts want the same one:
    holds the last helicopter seat a costly one needed;
 3. an option whose cost is under the rule cards' approval limit, whose saving is larger than
    its cost, and whose facts are complete (every link settled, every delay notice read) runs
-   at once (a spare only when the store keeps one more free, since another part the agents
-   could not trace may need it); anything else goes to the planner. So do every purchase
-   requisition, every fix for a ``capacity`` shortfall (whether a boat is full depends on
-   cargo the agents could not trace, packed on an estimated date) and every fix for a
-   ``weather`` shortfall (a forecast days out is wrong often enough that a person should
+   at once (a spare only when the store keeps one more free and also covers every part of
+   the same material needed by then whose supply the agents could not confirm, since such a
+   part may turn out to need that spare first); anything else goes to the planner. So do
+   every purchase requisition, every fix for a ``capacity`` shortfall (whether a boat is
+   full depends on cargo the agents could not trace, packed on an estimated date) and every
+   fix for a ``weather`` shortfall (a forecast days out is wrong often enough that a person should
    weigh it).
 
 Each run is checked against every rule card. An action that ran without approval and turns
@@ -77,9 +78,17 @@ def settle(
     qty: dict[str, int],
     prices: dict[str, float],
     doubtful: set[str] = frozenset(),
+    rivals: dict[str, int] | None = None,
 ) -> Settlement:
     """Settle the day's late parts; ``doubtful`` parts (a link still open, a delay notice
-    not read) never run without approval, whatever the cost."""
+    not read) never run without approval, whatever the cost. ``rivals`` gives, per part, the
+    units of its material that unconfirmed parts need by its need date; a spare is taken
+    without approval only when the store keeps that many (and at least one) free."""
+    rivals = rivals or {}
+
+    def spare_ok(p: StockProposal) -> bool:
+        return p.left >= max(1, rivals.get(p.component, 0))
+
     planner = Planner(net, rules)
     limit = rules.param("auto_limit_usd", 0.0)
     heli_used = {f.flight_id: f.cargo_booked_kg + f.pax * planner.pax_kg for f in net.flights}
@@ -150,7 +159,7 @@ def settle(
             and cod > cost
             and s.component not in doubtful
             and s.cause not in ("capacity", "weather")
-            and (kind != "transfer_stock" or stock[s.component].left > 0)
+            and (kind != "transfer_stock" or spare_ok(stock[s.component]))
         )
         action = Action(
             kind,
@@ -181,7 +190,7 @@ def settle(
                 p.component,
                 0.0,
                 a,
-                a.cost_usd < limit and p.left > 0 and p.component not in doubtful,
+                a.cost_usd < limit and spare_ok(p) and p.component not in doubtful,
                 p.value_usd - a.cost_usd,
             )
         )
@@ -198,6 +207,20 @@ def settle(
                 "procurement",
             )
             out.choices.append(Choice(r.component, 0.0, a, False))
+    return out
+
+
+def unconfirmed_demand(facts: list, as_of: date) -> dict[str, int]:
+    """Per part: units of its material that other parts need between today and its need
+    date while their supply is unconfirmed (no PO line, or a link still open)."""
+    open_ = [f for f in facts if f.need >= as_of and (f.po_line is None or f.unsettled)]
+    out = {}
+    for f in facts:
+        out[f.component] = sum(
+            o.qty
+            for o in open_
+            if o.material == f.material and o.component != f.component and o.need <= f.need
+        )
     return out
 
 
