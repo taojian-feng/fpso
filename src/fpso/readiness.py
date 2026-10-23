@@ -53,6 +53,7 @@ HORIZON_WEEKS = (4, 26)
 RULE_ACCEPT = 0.9  # a rule match at or above this, clear of the runner-up, needs no model
 RULE_MARGIN = 0.1
 BATCH = 40  # groups per model batch, in urgency order
+BATCH_ASYNC = 100  # groups per Message Batches request (about $0.30 at most past the cap)
 CHUNK = 25  # components settled end to end at a time, soonest need first
 MAX_SHOWN = 6  # candidates per group shown to the model
 MODEL_ACCEPT = 0.9  # the model's own confidence needed to accept its match
@@ -269,8 +270,9 @@ class ReadinessAgent:
                 key=lambda kv: (urgency.get(kv[0], date.max), kv[0]),
             )
             before = self.adjudicator.skipped_groups
-            for i in range(0, len(pending), BATCH):
-                batch = [c for _, g in pending[i : i + BATCH] for c in g]
+            size = BATCH_ASYNC if self.adjudicator.client.batches else BATCH
+            for i in range(0, len(pending), size):
+                batch = [c for _, g in pending[i : i + size] for c in g]
                 adjs += self.adjudicator.adjudicate(batch)
             self.stats["model_asked"] += len(pending)
             self.stats["skipped_by_cost_cap"] += self.adjudicator.skipped_groups - before
