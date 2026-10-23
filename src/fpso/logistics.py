@@ -315,12 +315,19 @@ def agent_items(facts: list[Facts], chain: ReadinessAgent, as_of: date) -> list[
     out = []
     for f in facts:
         expected = expected_delivery(f)
-        if f.po_line is None or expected is None or expected > horizon:
-            continue
+        if f.po_line is None or expected is None or (expected > horizon and f.need > horizon):
+            continue  # a part due in the window but arriving after it is late for sure
         if any(d <= as_of for d, _, _ in f.shipments):
             continue
-        if expected < as_of and "shipment" in f.unsettled:
-            continue  # delivered already; it may be on a manifest line nobody could link yet
+        if "shipment" in f.unsettled and (
+            expected < as_of
+            or any(
+                (d := chain.sailings.get(c["vessel"].get("manifest_line", ml).fields["sailing_id"]))
+                and d <= as_of
+                for ml in chain.open_targets("po_line_manifest_line", f.po_line)
+            )
+        ):
+            continue  # it may be on a manifest line nobody could link yet, already sailed
         wo = wos.get(f.work_order, {})
         out.append(
             Item(
@@ -384,7 +391,8 @@ def truth_items(world: World, as_of: date) -> list[Item]:
         if not pl or pl.order_date > as_of or pl.key in sailed:
             continue
         expected = max([pl.delivery_date, *slips.get(pl.key, [])])
-        if expected > as_of + timedelta(days=LOOKAHEAD_DAYS):
+        horizon = as_of + timedelta(days=LOOKAHEAD_DAYS)
+        if expected > horizon and c.req_date > horizon:
             continue
         w = wo[c.wo_no]
         out.append(

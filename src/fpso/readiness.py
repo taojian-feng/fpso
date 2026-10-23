@@ -325,6 +325,18 @@ class ReadinessAgent:
             out |= {c.from_key for c in g if c.from_key in sources and c.score >= top - 0.05}
         return out
 
+    def open_targets(self, lt: str, from_key: str) -> set[str]:
+        """Targets with no accepted link where this source leads (or ties for the lead)."""
+        groups = group_by_target(
+            [c for c in self.cands if c.link_type == lt and not self.links.get((lt, c.to_key))]
+        )
+        out = set()
+        for (_, to_key), g in groups.items():
+            top = max(c.score for c in g)
+            if any(c.from_key == from_key and c.score >= top - 0.05 for c in g):
+                out.add(to_key)
+        return out
+
     def linked_from(self, lt: str, from_key: str) -> list[str]:
         """Targets accepted as linked to this source record."""
         return [
