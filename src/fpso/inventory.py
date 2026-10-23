@@ -81,6 +81,8 @@ def find_stock(
         if r.action in ("order_now", "expedite"):
             wants[r.component] = (r.work_order, r.material, r.need, r.action)
     for s in shortfalls:
+        if not s.sure:
+            continue  # a full boat that rests on estimated dates; the planner decides
         wants.setdefault(s.component, (s.work_order, s.material, s.need, s.cause))
     out = []
     for comp, (wo, mat, need, why) in sorted(wants.items(), key=lambda kv: (kv[1][2], kv[0])):

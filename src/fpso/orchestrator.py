@@ -100,6 +100,9 @@ def settle(
     for s in sorted(shortfalls, key=lambda s: (-rate.get(s.component, 0) * s.late_days, s.need)):
         it = item.get(s.component)
         cod = rate.get(s.component, 0) * s.late_days
+        if not s.sure:  # a full boat resting on estimated dates: a warning, no booking
+            out.choices.append(Choice(s.component, cod, None))
+            continue
         options = []  # (cost, kind, payload)
         if s.component in stock:
             p = stock[s.component]

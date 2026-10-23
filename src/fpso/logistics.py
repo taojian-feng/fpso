@@ -152,6 +152,7 @@ class Shortfall:
     weight_kg: float = 0.0
     area_m2: float = 0.0
     po_line: str | None = None
+    sure: bool = True  # False: the full boat rests on estimated dates of untraced cargo
 
     @property
     def late_days(self) -> int:
@@ -269,15 +270,19 @@ class Planner:
 
 
 def agent_plan(planner: Planner, items: list[Item]) -> tuple[list[Leg], list[Shortfall]]:
-    """The agent's plan, keeping only the capacity shortfalls it can stand behind.
+    """The agent's plan over all cargo on order, untraced lines included.
 
-    A full boat depends on all cargo, including lines packed on an estimated date. A capacity
-    shortfall is kept only if it also appears when just the parts traced to a work order are
-    packed, which is the least the boats are sure to carry."""
+    Whether a boat is full depends on every line, so untraced lines are packed on their
+    estimated need date, and every capacity shortfall this gives is reported. Only those that
+    also appear when just the parts traced to a work order are packed (the least the boats
+    are sure to carry) are marked ``sure``; the rest rest on the estimate, so they go to the
+    planner as warnings and do not claim spare stock."""
     legs, short = planner.plan(items)
     _, sure = planner.plan([i for i in items if not i.component.startswith("po:")])
     traced = {s.component for s in sure if s.cause == "capacity"}
-    return legs, [s for s in short if s.cause != "capacity" or s.component in traced]
+    for s in short:
+        s.sure = s.cause != "capacity" or s.component in traced
+    return legs, short
 
 
 def _priority(in_turnaround: bool, criticality: str) -> int:
