@@ -153,6 +153,9 @@ class Adjudicator:
             schema=SCHEMA,
             effort="low",
         )
+        return self._parse(link_type, cands, data)
+
+    def _parse(self, link_type: str, cands: list[Candidate], data: dict) -> list[Adjudication]:
         model = self.client.role_models["adjudicate"]
         by_id = {d.get("id"): d for d in data.get("decisions", []) if isinstance(d, dict)}
         out = []
@@ -172,8 +175,30 @@ class Adjudicator:
         return out
 
     def adjudicate(self, cands: list[Candidate]) -> list[Adjudication]:
-        """Adjudicate every candidate, stopping early if the cost cap is reached."""
+        """Adjudicate every candidate, stopping early if the cost cap is reached.
+
+        With a batching backend the groups go out as one batch, so the cap is checked once
+        before it is sent and can be passed by up to that batch's cost."""
         groups = sorted(group_by_target(cands).items())
+        if self.client.batches:
+            if self.max_cost_usd is not None and (
+                self.client.log.total_cost_usd >= self.max_cost_usd
+            ):
+                self.skipped_groups += len(groups)
+                return []
+            answers = self.client.complete_many(
+                agent="resolver",
+                role="adjudicate",
+                system=SYSTEM,
+                prompts=[self.prompt(lt, to_key, g) for (lt, to_key), g in groups],
+                schema=SCHEMA,
+                effort="low",
+            )
+            return [
+                a
+                for ((lt, _), g), data in zip(groups, answers, strict=True)
+                for a in self._parse(lt, g, data)
+            ]
 
         def run(item):
             (link_type, to_key), group = item

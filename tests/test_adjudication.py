@@ -109,6 +109,26 @@ def test_cost_cap_stops_new_calls(run_dir):
     assert adjudicator.skipped_groups == 25 - 2
 
 
+def test_a_batching_backend_gives_the_same_verdicts_in_one_round_trip(run_dir):
+    connectors = open_all(run_dir / "extracts")
+    cands = sample_targets(CandidateGenerator(connectors).generate(), 5)
+
+    class Batching(StubBackend):
+        batches = True
+        rounds = 0
+
+        def complete_many(self, questions):
+            self.rounds += 1
+            return [self.complete_json(*q) for q in questions]
+
+    one = Adjudicator(connectors, ModelClient(StubBackend(responder=rule_responder)))
+    backend = Batching(responder=rule_responder)
+    many = Adjudicator(connectors, ModelClient(backend))
+    key = lambda a: (a.link_type, a.to_key, a.from_key)  # noqa: E731
+    assert sorted(many.adjudicate(cands), key=key) == sorted(one.adjudicate(cands), key=key)
+    assert backend.rounds == 1
+
+
 def test_pipeline_end_to_end_on_stub(run_dir, tmp_path):
     report = run_adjudication(
         run_dir,

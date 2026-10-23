@@ -6,7 +6,9 @@ import pytest
 from fpso.governance import ActionLog
 from fpso.models import (
     AnthropicBackend,
+    AnthropicBatchBackend,
     BedrockBackend,
+    CachedBackend,
     ModelClient,
     ModelRefused,
     StubBackend,
@@ -115,3 +117,54 @@ def test_env_overrides_one_roles_model(monkeypatch):
     client = client_from_env()
     assert client.role_models["adjudicate"] == "claude-haiku-5-5"
     assert client.role_models["induce"] == "claude-opus-5-5"
+
+
+class FakeBatches:
+    """Message Batches that end on the second poll; one request errors."""
+
+    def __init__(self):
+        self.polls = 0
+        self.sent = []
+
+    def create(self, requests):
+        self.sent = requests
+        return SimpleNamespace(id="b1", processing_status="in_progress")
+
+    def retrieve(self, batch_id):
+        self.polls += 1
+        return SimpleNamespace(id=batch_id, processing_status="ended" if self.polls > 1 else "x")
+
+    def results(self, batch_id):
+        for r in reversed(self.sent):  # any order: matched by custom_id
+            if r["custom_id"] == "q1":
+                yield SimpleNamespace(custom_id="q1", result=SimpleNamespace(type="errored"))
+                continue
+            msg = SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=json.dumps({"n": r["custom_id"]}))],
+                usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
+            )
+            yield SimpleNamespace(
+                custom_id=r["custom_id"], result=SimpleNamespace(type="succeeded", message=msg)
+            )
+
+
+def test_batched_questions_cost_half_and_errors_are_asked_again(tmp_path):
+    fake = SimpleNamespace(messages=SimpleNamespace(batches=FakeBatches()))
+    backend = CachedBackend(AnthropicBatchBackend(client=fake, poll_seconds=0), tmp_path / "a")
+    client = ModelClient(backend)
+    assert client.batches
+    out = client.complete_many(
+        agent="t", role="adjudicate", system="s", prompts=["a", "b", "c"], schema={}
+    )
+    assert out == [{"n": "q0"}, {}, {"n": "q2"}]
+    full = (1000 * 2.00 + 100 * 10.00) / 1e6  # Sonnet list price for one answer
+    assert abs(client.log.total_cost_usd - 2 * full * 0.5) < 1e-9
+    again = client.complete_many(
+        agent="t", role="adjudicate", system="s", prompts=["a", "b", "c"], schema={}
+    )
+    assert (
+        backend.hits == 2
+        and fake.messages.batches.sent[0]["params"]["messages"][0]["content"] == "b"
+    )  # only the errored question went out again
+    assert again[0] == {"n": "q0"}

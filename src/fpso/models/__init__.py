@@ -7,10 +7,14 @@ Three backends exist:
 - ``StubBackend``: no network, for tests and for work before a model account is ready.
 - ``AnthropicBackend``: Claude through the Anthropic API with an API key (Phase 0 default).
 - ``BedrockBackend``: Claude on Amazon Bedrock in one region (kept for a later move).
+- ``AnthropicBatchBackend``: the Anthropic API's Message Batches, at half price. Questions
+  asked together (``ModelClient.complete_many``) go out as one batch and come back in
+  minutes rather than seconds, so it suits replays, not a planner waiting on an answer.
 
 Pick one with ``client_from_env()``: ``FPSO_MODEL_BACKEND=anthropic`` uses
 ``ANTHROPIC_API_KEY``; ``FPSO_MODEL_BACKEND=bedrock`` plus ``AWS_REGION`` (and optionally
-``AWS_PROFILE``) selects Bedrock; anything else gives the stub.
+``AWS_PROFILE``) selects Bedrock; anything else gives the stub. ``FPSO_MODEL_BATCH=1`` with
+the Anthropic backend sends grouped questions through Message Batches.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,11 +56,13 @@ class ModelResult:
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
+    price_share: float = 1.0  # 0.5 for Message Batches
 
     @property
     def cost_usd(self) -> float:
         price_in, price_out = PRICES_PER_MTOK.get(self.model, (0.0, 0.0))
-        return (self.input_tokens * price_in + self.output_tokens * price_out) / 1_000_000
+        full = (self.input_tokens * price_in + self.output_tokens * price_out) / 1_000_000
+        return full * self.price_share
 
 
 class ModelRefused(RuntimeError):
@@ -95,11 +102,35 @@ class CachedBackend:
                 self.hits += 1
                 return ModelResult(self._answers[k], model)
         result = self.inner.complete_json(model, system, prompt, schema, effort)
+        self._save(k, result)
+        return result
+
+    @property
+    def batches(self) -> bool:
+        return getattr(self.inner, "batches", False)
+
+    def complete_many(self, questions: list[Question]) -> list[ModelResult]:
+        keys = [self.key(m, sy, p, e) for m, sy, p, _, e in questions]
+        out: list[ModelResult | None] = [None] * len(questions)
+        with self._lock:
+            for i, k in enumerate(keys):
+                if k in self._answers:
+                    self.hits += 1
+                    out[i] = ModelResult(self._answers[k], questions[i][0])
+        todo = [i for i, r in enumerate(out) if r is None]
+        for i, result in zip(
+            todo, complete_many(self.inner, [questions[i] for i in todo]), strict=True
+        ):
+            if result.data:  # an empty answer (errored request) is asked again next time
+                self._save(keys[i], result)
+            out[i] = result
+        return out  # type: ignore[return-value]
+
+    def _save(self, k: str, result: ModelResult) -> None:
         with self._lock:
             self._answers[k] = result.data
             with self.path.open("a") as f:
                 f.write(json.dumps({"key": k, "data": result.data}) + "\n")
-        return result
 
 
 @dataclass
@@ -122,24 +153,37 @@ class StubBackend:
         return ModelResult(data=data, model=model, input_tokens=len(prompt) // 4)
 
 
+Question = tuple[str, str, str, dict[str, Any], str]  # model, system, prompt, schema, effort
+
+
+def complete_many(backend: Any, questions: list[Question]) -> list[ModelResult]:
+    """Answer several questions, in one batch when the backend can."""
+    if hasattr(backend, "complete_many"):
+        return backend.complete_many(questions)
+    return [backend.complete_json(*q) for q in questions]
+
+
 class _MessagesBackend:
     """Shared request logic for backends that speak the Anthropic Messages API."""
 
     client: Any
     model_prefix = ""
 
-    def complete_json(self, model, system, prompt, schema, effort):
+    def params(self, model, system, prompt, schema, effort) -> dict[str, Any]:
         json_schema = {k: v for k, v in schema.items() if k != "default"}
-        response = self.client.messages.create(
-            model=f"{self.model_prefix}{model}",
-            max_tokens=16000,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-            output_config={
+        return {
+            "model": f"{self.model_prefix}{model}",
+            "max_tokens": 16000,
+            "system": system,
+            "messages": [{"role": "user", "content": prompt}],
+            "output_config": {
                 "effort": effort,
                 "format": {"type": "json_schema", "schema": json_schema},
             },
-        )
+        }
+
+    @staticmethod
+    def result(model: str, response: Any, price_share: float = 1.0) -> ModelResult:
         if response.stop_reason == "refusal":
             raise ModelRefused(f"{model} refused: {response.stop_details}")
         text = next(b.text for b in response.content if b.type == "text")
@@ -148,7 +192,12 @@ class _MessagesBackend:
             model=model,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            price_share=price_share,
         )
+
+    def complete_json(self, model, system, prompt, schema, effort):
+        response = self.client.messages.create(**self.params(model, system, prompt, schema, effort))
+        return self.result(model, response)
 
 
 class AnthropicBackend(_MessagesBackend):
@@ -160,6 +209,43 @@ class AnthropicBackend(_MessagesBackend):
 
             client = Anthropic()
         self.client = client
+
+
+class AnthropicBatchBackend(AnthropicBackend):
+    """Message Batches: grouped questions at half price, answered when the batch ends.
+
+    A single question still goes through the Messages API at full price. An errored,
+    expired or refused request comes back as an empty answer, which the agents treat as
+    'no decision' and leave open."""
+
+    batches = True
+    PRICE_SHARE = 0.5
+
+    def __init__(self, client: Any = None, poll_seconds: float = 20.0):
+        super().__init__(client)
+        self.poll_seconds = poll_seconds
+
+    def complete_many(self, questions: list[Question]) -> list[ModelResult]:
+        if not questions:
+            return []
+        batch = self.client.messages.batches.create(
+            requests=[
+                {"custom_id": f"q{i}", "params": self.params(*q)} for i, q in enumerate(questions)
+            ]
+        )
+        while batch.processing_status != "ended":
+            time.sleep(self.poll_seconds)
+            batch = self.client.messages.batches.retrieve(batch.id)
+        out = [ModelResult({}, q[0]) for q in questions]
+        for row in self.client.messages.batches.results(batch.id):
+            i = int(row.custom_id[1:])
+            if row.result.type != "succeeded":
+                continue
+            try:
+                out[i] = self.result(questions[i][0], row.result.message, self.PRICE_SHARE)
+            except (ModelRefused, StopIteration, json.JSONDecodeError):
+                pass
+        return out
 
 
 class BedrockBackend(_MessagesBackend):
@@ -200,6 +286,31 @@ class ModelClient:
     ) -> dict[str, Any]:
         model = self.role_models[role]
         result = self.backend.complete_json(model, system, prompt, schema, effort)
+        self._log(agent, role, prompt, result)
+        return result.data
+
+    @property
+    def batches(self) -> bool:
+        return getattr(self.backend, "batches", False)
+
+    def complete_many(
+        self,
+        *,
+        agent: str,
+        role: str,
+        system: str,
+        prompts: list[str],
+        schema: dict[str, Any],
+        effort: str = "medium",
+    ) -> list[dict[str, Any]]:
+        """Several questions for one role; one batch when the backend sends batches."""
+        model = self.role_models[role]
+        results = complete_many(self.backend, [(model, system, p, schema, effort) for p in prompts])
+        for p, r in zip(prompts, results, strict=True):
+            self._log(agent, role, p, r)
+        return [r.data for r in results]
+
+    def _log(self, agent: str, role: str, prompt: str, result: ModelResult) -> None:
         self.log.write(
             ActionRecord(
                 agent=agent,
@@ -212,14 +323,14 @@ class ModelClient:
                 cost_usd=result.cost_usd,
             )
         )
-        return result.data
 
 
 def client_from_env(log: ActionLog | None = None) -> ModelClient:
     choice = os.environ.get("FPSO_MODEL_BACKEND", "stub")
     backend: Backend
     if choice == "anthropic":
-        backend = AnthropicBackend()
+        batch = os.environ.get("FPSO_MODEL_BATCH", "") not in ("", "0")
+        backend = AnthropicBatchBackend() if batch else AnthropicBackend()
     elif choice == "bedrock":
         backend = BedrockBackend(
             region=os.environ.get("AWS_REGION", "us-east-1"),
