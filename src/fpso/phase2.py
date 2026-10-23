@@ -102,8 +102,8 @@ def actions_for(
                 )
             )
     for s in shortfalls:
-        if s.component in covered or s.option is None:
-            continue
+        if s.component in covered or s.option is None or not s.sure:
+            continue  # an unsure full boat is a warning in the brief, not a booking
         kind = "book_helicopter_cargo" if s.option == "helicopter" else "request_vessel_slot"
         cost = heli_cost(s.weight_kg) if s.option == "helicopter" else slot_cost(s.area_m2)
         out.append(

@@ -36,7 +36,7 @@ from fpso.inventory import balances_from_connectors, find_stock
 from fpso.liaison import email_kind
 from fpso.logistics import Network, Planner, agent_items, agent_plan, score_shortfalls, truth_items
 from fpso.models import CachedBackend, client_from_env
-from fpso.orchestrator import check, day_rate, emergency_cost, settle
+from fpso.orchestrator import check, day_rate, emergency_cost, settle, unconfirmed_demand
 from fpso.phase2 import ensure_logistics
 from fpso.procurement import ProcurementAgent, truth_recommendations
 from fpso.readiness import load_world
@@ -189,7 +189,18 @@ def run_orchestration(
             bus.publish("condition.alert", equipment=a.equipment, level=a.level, as_of=d)
         camp = campaigns(agent.connectors, d)
         sett = settle(
-            d, items, short, props, recs, net_w, rules, rate, qty, prices, doubtful(agent, d)
+            d,
+            items,
+            short,
+            props,
+            recs,
+            net_w,
+            rules,
+            rate,
+            qty,
+            prices,
+            doubtful(agent, d),
+            unconfirmed_demand(agent.facts, d),
         )
         nxt = next(
             (s for s in net_w.sailings if s.depart > d and s.sailing_id not in net_w.cancelled),
